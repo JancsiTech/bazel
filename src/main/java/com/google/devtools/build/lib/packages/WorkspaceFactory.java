@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.packages;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSortedSet;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.Event;
@@ -329,7 +328,7 @@ public class WorkspaceFactory {
       }
     }
 
-    return env.build();
+    return env.buildOrThrow();
   }
 
   private ImmutableMap<String, Object> getDefaultEnvironment() {
@@ -346,7 +345,7 @@ public class WorkspaceFactory {
     for (EnvironmentExtension ext : environmentExtensions) {
       ext.updateWorkspace(env);
     }
-    return env.build();
+    return env.buildOrThrow();
   }
 
   private String getDefaultSystemJavabase() {
@@ -390,7 +389,7 @@ public class WorkspaceFactory {
     }
     bindings.put("bazel_version", version);
 
-    return bindings.build();
+    return bindings.buildOrThrow();
   }
 
   public Map<String, Module> getLoadedModules() {
@@ -403,9 +402,5 @@ public class WorkspaceFactory {
 
   public Map<PathFragment, RepositoryName> getManagedDirectories() {
     return workspaceGlobals.getManagedDirectories();
-  }
-
-  public ImmutableSortedSet<String> getDoNotSymlinkInExecrootPaths() {
-    return workspaceGlobals.getDoNotSymlinkInExecrootPaths();
   }
 }

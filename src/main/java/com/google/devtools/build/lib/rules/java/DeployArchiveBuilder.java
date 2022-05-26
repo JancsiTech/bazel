@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.rules.java;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static java.util.Objects.requireNonNull;
 
 import com.google.common.base.Function;
 import com.google.common.base.Preconditions;
@@ -30,10 +31,12 @@ import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
+import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.rules.cpp.CppHelper;
 import com.google.devtools.build.lib.rules.java.JavaConfiguration.OneVersionEnforcementLevel;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.HashSet;
 import java.util.Set;
 import javax.annotation.Nullable;
@@ -69,6 +72,12 @@ public class DeployArchiveBuilder {
   private OneVersionEnforcementLevel oneVersionEnforcementLevel = OneVersionEnforcementLevel.OFF;
   @Nullable private Artifact oneVersionAllowlistArtifact;
   @Nullable private Artifact sharedArchive;
+  private boolean multiReleaseDeployJars;
+  @Nullable private PathFragment javaHome;
+  @Nullable private Artifact libModules;
+  private NestedSet<Artifact> hermeticInputs = NestedSetBuilder.emptySet(Order.STABLE_ORDER);
+  private NestedSet<String> addExports;
+  private NestedSet<String> addOpens;
 
   /** Type of compression to apply to output archive. */
   public enum Compression {
@@ -169,8 +178,38 @@ public class DeployArchiveBuilder {
     return this;
   }
 
+  public DeployArchiveBuilder setMultiReleaseDeployJars(boolean multiReleaseDeployJars) {
+    this.multiReleaseDeployJars = multiReleaseDeployJars;
+    return this;
+  }
+
   public DeployArchiveBuilder setSharedArchive(@Nullable Artifact sharedArchive) {
     this.sharedArchive = sharedArchive;
+    return this;
+  }
+
+  public DeployArchiveBuilder setJavaHome(PathFragment javaHome) {
+    this.javaHome = requireNonNull(javaHome);
+    return this;
+  }
+
+  public DeployArchiveBuilder setLibModules(@Nullable Artifact libModules) {
+    this.libModules = libModules;
+    return this;
+  }
+
+  public DeployArchiveBuilder setHermeticInputs(NestedSet<Artifact> hermeticInputs) {
+    this.hermeticInputs = requireNonNull(hermeticInputs);
+    return this;
+  }
+
+  public DeployArchiveBuilder setAddExports(NestedSet<String> addExports) {
+    this.addExports = addExports;
+    return this;
+  }
+
+  public DeployArchiveBuilder setAddOpens(NestedSet<String> addOpens) {
+    this.addOpens = addOpens;
     return this;
   }
 
@@ -183,7 +222,13 @@ public class DeployArchiveBuilder {
       NestedSet<Artifact> runtimeClasspath,
       boolean includeBuildData,
       Compression compress,
-      Artifact launcher) {
+      Artifact launcher,
+      boolean multiReleaseDeployJars,
+      PathFragment javaHome,
+      Artifact libModules,
+      NestedSet<Artifact> hermeticInputs,
+      NestedSet<String> addExports,
+      NestedSet<String> addOpens) {
     return defaultSingleJarCommandLine(
         outputJar,
         javaMainClass,
@@ -195,7 +240,13 @@ public class DeployArchiveBuilder {
         compress,
         launcher,
         OneVersionEnforcementLevel.OFF,
-        null);
+        null,
+        /* multiReleaseDeployJars= */ multiReleaseDeployJars,
+        javaHome,
+        libModules,
+        hermeticInputs,
+        addExports,
+        addOpens);
   }
 
   public static CustomCommandLine.Builder defaultSingleJarCommandLine(
@@ -209,7 +260,13 @@ public class DeployArchiveBuilder {
       Compression compress,
       Artifact launcher,
       OneVersionEnforcementLevel oneVersionEnforcementLevel,
-      @Nullable Artifact oneVersionAllowlistArtifact) {
+      @Nullable Artifact oneVersionAllowlistArtifact,
+      boolean multiReleaseDeployJars,
+      PathFragment javaHome,
+      Artifact libModules,
+      NestedSet<Artifact> hermeticInputs,
+      NestedSet<String> addExports,
+      NestedSet<String> addOpens) {
 
     CustomCommandLine.Builder args = CustomCommandLine.builder();
     args.addExecPath("--output", outputJar);
@@ -253,6 +310,14 @@ public class DeployArchiveBuilder {
         args.add("--succeed_on_found_violations");
       }
     }
+    if (multiReleaseDeployJars) {
+      args.add("--multi_release");
+    }
+    args.addPath("--hermetic_java_home", javaHome);
+    args.addExecPath("--jdk_lib_modules", libModules);
+    args.addExecPaths("--resources", hermeticInputs);
+    args.addAll("--add_exports", addExports);
+    args.addAll("--add_opens", addOpens);
     return args;
   }
 
@@ -335,6 +400,10 @@ public class DeployArchiveBuilder {
     if (sharedArchive != null) {
       inputs.add(sharedArchive);
     }
+    inputs.addTransitive(hermeticInputs);
+    if (libModules != null) {
+      inputs.add(libModules);
+    }
 
     Artifact singlejar = JavaToolchainProvider.from(ruleContext).getSingleJar();
 
@@ -361,7 +430,13 @@ public class DeployArchiveBuilder {
             launcher,
             oneVersionEnforcementLevel,
             oneVersionAllowlistArtifact,
-            sharedArchive);
+            sharedArchive,
+            /* multiReleaseDeployJars= */ multiReleaseDeployJars,
+            javaHome,
+            libModules,
+            hermeticInputs,
+            addExports,
+            addOpens);
     if (checkDesugarDeps) {
       commandLine = CommandLine.concat(commandLine, ImmutableList.of("--check_desugar_deps"));
     }
@@ -382,7 +457,7 @@ public class DeployArchiveBuilder {
                 ParamFileInfo.builder(ParameterFileType.SHELL_QUOTED).setUseAlways(true).build())
             .setProgressMessage("Building deploy jar %{output}")
             .setMnemonic("JavaDeployJar")
-            .setExecutionInfo(executionInfo.build())
+            .setExecutionInfo(executionInfo.buildOrThrow())
             .build(ruleContext));
   }
 }

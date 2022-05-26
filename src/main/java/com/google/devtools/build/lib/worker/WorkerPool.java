@@ -39,7 +39,7 @@ import org.apache.commons.pool2.impl.GenericKeyedObjectPool;
  * requests, but do so through WorkerProxy instances.
  */
 @ThreadSafe
-final class WorkerPool {
+public final class WorkerPool {
   /** Unless otherwise specified, the max number of workers per WorkerKey. */
   private static final int DEFAULT_MAX_WORKERS = 4;
   /** Unless otherwise specified, the max number of multiplex workers per WorkerKey. */
@@ -200,13 +200,17 @@ final class WorkerPool {
     multiplexPools.values().forEach(GenericKeyedObjectPool::close);
   }
 
-  static class WorkerPoolConfig {
+  /**
+   * Describes the configuration of worker pool, e.g. number of maximal instances and priority of
+   * the workers.
+   */
+  public static class WorkerPoolConfig {
     private final WorkerFactory workerFactory;
     private final List<Entry<String, Integer>> workerMaxInstances;
     private final List<Entry<String, Integer>> workerMaxMultiplexInstances;
     private final List<String> highPriorityWorkers;
 
-    WorkerPoolConfig(
+    public WorkerPoolConfig(
         WorkerFactory workerFactory,
         List<Entry<String, Integer>> workerMaxInstances,
         List<Entry<String, Integer>> workerMaxMultiplexInstances,

@@ -1,4 +1,4 @@
-load(":starlark_tests.bzl", "additional_inputs_test", "build_failure_test", "debug_files_test", "linking_suffix_test", "paths_test")
+load(":starlark_tests.bzl", "additional_inputs_test", "build_failure_test", "debug_files_test", "linking_suffix_test", "paths_test", "runfiles_test")
 
 LINKABLE_MORE_THAN_ONCE = "LINKABLE_MORE_THAN_ONCE"
 
@@ -6,6 +6,12 @@ licenses(["notice"])
 
 package(
     default_visibility = ["//src/main/starlark/tests/builtins_bzl/cc/cc_shared_library/test_cc_shared_library:__subpackages__"],
+)
+
+py_test(
+    name = "python_test",
+    srcs = ["python_test.py"],
+    data = ["foo_so"],
 )
 
 cc_test(
@@ -36,18 +42,21 @@ cc_binary(
 cc_shared_library(
     name = "a_so",
     roots = [":a_suffix"],
+    features = ["windows_export_all_symbols"],
 )
 
 cc_shared_library(
     name = "diamond_so",
     dynamic_deps = [":a_so"],
     roots = [":qux"],
+    features = ["windows_export_all_symbols"],
 )
 
 cc_shared_library(
     name = "diamond2_so",
     dynamic_deps = [":a_so"],
     roots = [":qux2"],
+    features = ["windows_export_all_symbols"],
 )
 
 cc_binary(
@@ -90,6 +99,7 @@ cc_shared_library(
         "-Wl,--script=$(location :additional_script.txt)",
       ],
       "//conditions:default": []}),
+    features = ["windows_export_all_symbols"],
 )
 
 cc_library(
@@ -100,7 +110,11 @@ cc_library(
 
 cc_library(
     name = "foo",
-    srcs = ["foo.cc"],
+    srcs = ["foo.cc",  "direct_so_file_cc_lib2.h"]
+       + select({
+        "//src/conditions:linux": [":renamed_so_file_copy.so"],
+        "//conditions:default": [],
+       }),
     hdrs = ["foo.h"],
     defines = select({
       "//src/conditions:linux": ["IS_LINUX"],
@@ -133,6 +147,7 @@ cc_library(
 cc_library(
     name = "qux",
     srcs = ["qux.cc"],
+    linkstamp = "l.cc",
     hdrs = ["qux.h"],
 )
 
@@ -180,6 +195,7 @@ cc_shared_library(
       ],
       "//conditions:default": [],
     }),
+    features = ["windows_export_all_symbols"],
 )
 
 cc_library(
@@ -291,7 +307,7 @@ build_failure_test(
 
 cc_library(
     name = "prebuilt",
-    srcs = [":just_main_output"],
+    srcs = [":just_main_output", "direct_so_file_cc_lib.h"],
 )
 
 filegroup(
@@ -305,6 +321,7 @@ cc_shared_library(
     roots = [
         ":direct_so_file_cc_lib",
     ],
+    features = ["windows_export_all_symbols"],
 )
 
 genrule(
@@ -323,14 +340,20 @@ filegroup(
 cc_shared_library(
     name = "renamed_so_file",
     roots = [
-        ":direct_so_file_cc_lib",
+        ":direct_so_file_cc_lib2",
     ],
     shared_lib_name = "renamed_so_file.so",
+    features = ["windows_export_all_symbols"],
 )
 
 cc_library(
     name = "direct_so_file_cc_lib",
-    srcs = ["direct_so_file_cc_lib.cc"],
+    srcs = ["direct_so_file_cc_lib.cc", "direct_so_file_cc_lib.h"],
+)
+
+cc_library(
+    name = "direct_so_file_cc_lib2",
+    srcs = ["direct_so_file_cc_lib2.cc", "direct_so_file_cc_lib2.h"],
 )
 
 cc_shared_library_permissions(
@@ -350,13 +373,21 @@ build_failure_test(
 
 build_failure_test(
     name = "two_dynamic_deps_same_export_in_binary_test",
-    message = "Two shared libraries in dependencies export the same symbols",
+    message = "Two shared libraries in dependencies link the same  library statically",
     target_under_test = "//src/main/starlark/tests/builtins_bzl/cc/cc_shared_library/test_cc_shared_library/failing_targets:two_dynamic_deps_same_export_in_binary",
 )
 
 debug_files_test(
     name = "debug_files_test",
     target_under_test = ":binary",
+)
+
+runfiles_test(
+    name = "runfiles_test",
+    target_under_test = ":python_test",
+    is_linux = select({
+        "//src/conditions:linux": True,
+        "//conditions:default": False}),
 )
 
 build_failure_test(

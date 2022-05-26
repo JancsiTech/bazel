@@ -9,6 +9,7 @@ filegroup(
         "//tools/buildstamp:srcs",
         "//tools/build_defs:srcs",
         "//tools/build_rules:srcs",
+        "//tools/compliance:srcs",
         "//tools/config:srcs",
         "//tools/coverage:srcs",
         "//tools/ctexplain:srcs",
@@ -24,6 +25,7 @@ filegroup(
         "//tools/objc:srcs",
         "//tools/osx:srcs",
         "//tools/osx/crosstool:srcs",
+        "//tools/windows:srcs",
         "//tools/test:srcs",
         "//tools/test/CoverageOutputGenerator/java/com/google/devtools/coverageoutputgenerator:srcs",
         "//tools/test/CoverageOutputGenerator/javatests/com/google/devtools/coverageoutputgenerator:srcs",
@@ -32,6 +34,7 @@ filegroup(
         "//tools/sh:srcs",
         "//tools/allowlists:srcs",
         "//tools/zip:srcs",
+        "//tools/mini_tar:srcs",
     ],
 )
 
@@ -55,6 +58,7 @@ filegroup(
         "//tools/jdk:srcs",
         "//tools/launcher:srcs",
         "//tools/def_parser:srcs",
+        "//tools/windows:srcs",
         "//tools/platforms:srcs",
         "//tools/objc:srcs",
         "//tools/python:embedded_tools",
@@ -82,6 +86,8 @@ filegroup(
         "//tools/osx:bzl_srcs",
         "//tools/python:bzl_srcs",
         "//tools/sh:bzl_srcs",
+        "//tools/test:bzl_srcs",
+        "//tools/windows:bzl_srcs",
     ],
 )
 

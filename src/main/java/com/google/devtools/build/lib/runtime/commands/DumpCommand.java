@@ -124,13 +124,12 @@ public class DumpCommand implements BlazeCommand {
     public String starlarkMemory;
 
     @Option(
-      name = "skyframe",
-      defaultValue = "off",
-      converter = SkyframeDumpEnumConverter.class,
-      documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
-      effectTags = {OptionEffectTag.BAZEL_MONITORING},
-      help = "Dump Skyframe graph: 'off', 'summary', or 'detailed'."
-    )
+        name = "skyframe",
+        defaultValue = "off",
+        converter = SkyframeDumpEnumConverter.class,
+        documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
+        effectTags = {OptionEffectTag.BAZEL_MONITORING},
+        help = "Dump Skyframe graph: 'off', 'summary', 'count', or 'detailed'.")
     public SkyframeDumpOption dumpSkyframe;
 
     @Option(
@@ -149,6 +148,7 @@ public class DumpCommand implements BlazeCommand {
   public enum SkyframeDumpOption {
     OFF,
     SUMMARY,
+    COUNT,
     DETAILED
   }
 
@@ -216,8 +216,18 @@ public class DumpCommand implements BlazeCommand {
       }
 
       if (dumpOptions.dumpRules) {
-        dumpRuleStats(env.getReporter(), env.getBlazeWorkspace(), env.getSkyframeExecutor(), out);
-        out.println();
+        try {
+          dumpRuleStats(env.getReporter(), env.getBlazeWorkspace(), env.getSkyframeExecutor(), out);
+          out.println();
+        } catch (InterruptedException e) {
+          env.getReporter().error(null, "Interrupted", e);
+          return BlazeCommandResult.failureDetail(
+              FailureDetail.newBuilder()
+                  .setInterrupted(
+                      FailureDetails.Interrupted.newBuilder()
+                          .setCode(FailureDetails.Interrupted.Code.INTERRUPTED))
+                  .build());
+        }
       }
 
       if (dumpOptions.starlarkMemory != null) {
@@ -236,6 +246,9 @@ public class DumpCommand implements BlazeCommand {
           break;
         case SUMMARY:
           evaluator.dumpSummary(out);
+          break;
+        case COUNT:
+          evaluator.dumpCount(out);
           break;
         case DETAILED:
           evaluator.dumpDetailed(
@@ -290,7 +303,8 @@ public class DumpCommand implements BlazeCommand {
       ExtendedEventHandler eventHandler,
       BlazeWorkspace workspace,
       SkyframeExecutor executor,
-      PrintStream out) {
+      PrintStream out)
+      throws InterruptedException {
     List<RuleStat> ruleStats = executor.getRuleStats(eventHandler);
     if (ruleStats.isEmpty()) {
       out.print("No rules in Bazel server, please run a build command first.");

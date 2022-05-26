@@ -217,7 +217,8 @@ public class ConfiguredTargetQueryEnvironment
             skyframeExecutor,
             accessor,
             aspectResolver,
-            OutputType.BINARY),
+            OutputType.BINARY,
+            trimmingTransitionFactory),
         new ProtoOutputFormatterCallback(
             eventHandler,
             cqueryOptions,
@@ -225,7 +226,8 @@ public class ConfiguredTargetQueryEnvironment
             skyframeExecutor,
             accessor,
             aspectResolver,
-            OutputType.TEXT),
+            OutputType.TEXT,
+            trimmingTransitionFactory),
         new ProtoOutputFormatterCallback(
             eventHandler,
             cqueryOptions,
@@ -233,7 +235,8 @@ public class ConfiguredTargetQueryEnvironment
             skyframeExecutor,
             accessor,
             aspectResolver,
-            OutputType.JSON),
+            OutputType.JSON,
+            trimmingTransitionFactory),
         new BuildOutputFormatterCallback(
             eventHandler, cqueryOptions, out, skyframeExecutor, accessor),
         new GraphOutputFormatterCallback(
@@ -416,7 +419,7 @@ public class ConfiguredTargetQueryEnvironment
                       + "A short ID is any prefix of a full ID. cquery shows short IDs. 'bazel "
                       + "config' shows full IDs.\n"
                       + "\n"
-                      + "For more help, see https://docs.bazel.build/cquery.html.",
+                      + "For more help, see https://bazel.build/docs/cquery.",
                   ConfigurableQuery.Code.INCORRECT_CONFIG_ARGUMENT_ERROR);
             }
         }

@@ -279,16 +279,6 @@ public class Path implements Comparable<Path>, FileType.HasFileType {
     return fileSystem.stat(asFragment(), true);
   }
 
-  /** Like stat(), but returns null on file-nonexistence instead of throwing. */
-  public FileStatus statNullable() {
-    return statNullable(Symlinks.FOLLOW);
-  }
-
-  /** Like stat(), but returns null on file-nonexistence instead of throwing. */
-  public FileStatus statNullable(Symlinks symlinks) {
-    return fileSystem.statNullable(asFragment(), symlinks.toBoolean());
-  }
-
   /**
    * Returns the status of a file, optionally following symbolic links.
    *
@@ -300,6 +290,16 @@ public class Path implements Comparable<Path>, FileType.HasFileType {
    */
   public FileStatus stat(Symlinks followSymlinks) throws IOException {
     return fileSystem.stat(asFragment(), followSymlinks.toBoolean());
+  }
+
+  /** Like stat(), but returns null on file-nonexistence instead of throwing. */
+  public FileStatus statNullable() {
+    return statNullable(Symlinks.FOLLOW);
+  }
+
+  /** Like stat(), but returns null on file-nonexistence instead of throwing. */
+  public FileStatus statNullable(Symlinks symlinks) {
+    return fileSystem.statNullable(asFragment(), symlinks.toBoolean());
   }
 
   /**
@@ -703,7 +703,7 @@ public class Path implements Comparable<Path>, FileType.HasFileType {
    * @return a string representation of the bash of the directory
    * @throws IOException if the digest could not be computed for any reason
    */
-  public String getDirectoryDigest() throws IOException {
+  public String getDirectoryDigest(XattrProvider xattrProvider) throws IOException {
     ImmutableList<String> entries =
         ImmutableList.sortedCopyOf(fileSystem.getDirectoryEntries(asFragment()));
     Hasher hasher = fileSystem.getDigestFunction().getHashFunction().newHasher();
@@ -717,9 +717,10 @@ public class Path implements Comparable<Path>, FileType.HasFileType {
         } else {
           hasher.putChar('-');
         }
-        hasher.putBytes(DigestUtils.getDigestWithManualFallback(path, stat.getSize()));
+        hasher.putBytes(
+            DigestUtils.getDigestWithManualFallback(path, stat.getSize(), xattrProvider));
       } else if (stat.isDirectory()) {
-        hasher.putChar('d').putUnencodedChars(path.getDirectoryDigest());
+        hasher.putChar('d').putUnencodedChars(path.getDirectoryDigest(xattrProvider));
       } else if (stat.isSymbolicLink()) {
         PathFragment link = path.readSymbolicLink();
         if (link.isAbsolute()) {
@@ -731,7 +732,8 @@ public class Path implements Comparable<Path>, FileType.HasFileType {
               } else {
                 hasher.putChar('-');
               }
-              hasher.putBytes(DigestUtils.getDigestWithManualFallbackWhenSizeUnknown(resolved));
+              hasher.putBytes(
+                  DigestUtils.getDigestWithManualFallbackWhenSizeUnknown(resolved, xattrProvider));
             } else {
               // link to a non-file: include the link itself in the hash
               hasher.putChar('l').putUnencodedChars(link.toString());

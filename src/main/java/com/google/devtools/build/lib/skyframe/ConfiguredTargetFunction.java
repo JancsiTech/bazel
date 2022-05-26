@@ -52,9 +52,11 @@ import com.google.devtools.build.lib.analysis.config.ConfigConditions;
 import com.google.devtools.build.lib.analysis.config.ConfigMatchingProvider;
 import com.google.devtools.build.lib.analysis.config.ConfigurationResolver;
 import com.google.devtools.build.lib.analysis.config.DependencyEvaluationException;
+import com.google.devtools.build.lib.analysis.config.ToolchainTypeRequirement;
 import com.google.devtools.build.lib.analysis.config.transitions.PatchTransition;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
+import com.google.devtools.build.lib.bugreport.BugReport;
 import com.google.devtools.build.lib.causes.AnalysisFailedCause;
 import com.google.devtools.build.lib.causes.Cause;
 import com.google.devtools.build.lib.causes.LoadingFailedCause;
@@ -88,8 +90,7 @@ import com.google.devtools.build.skyframe.SkyFunction.Environment.SkyKeyComputeS
 import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
-import com.google.devtools.build.skyframe.ValueOrException;
-import com.google.devtools.build.skyframe.ValueOrUntypedException;
+import com.google.devtools.build.skyframe.SkyframeLookupResult;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -345,8 +346,6 @@ public final class ConfiguredTargetFunction implements SkyFunction {
               unloadedToolchainContexts == null
                   ? null
                   : unloadedToolchainContexts.asToolchainContexts(),
-              DependencyResolver.shouldUseToolchainTransition(
-                  targetAndConfiguration.getConfiguration(), targetAndConfiguration.getTarget()),
               ruleClassProvider,
               view.getHostConfiguration());
       if (!state.transitiveRootCauses.isEmpty()) {
@@ -478,12 +477,15 @@ public final class ConfiguredTargetFunction implements SkyFunction {
     } else {
       packageAndMaybeConfiguration = ImmutableSet.of(packageKey, configurationKeyMaybe);
     }
-    Map<SkyKey, SkyValue> packageAndMaybeConfigurationValues =
-        env.getValues(packageAndMaybeConfiguration);
+    SkyframeLookupResult packageAndMaybeConfigurationValues =
+        env.getValuesAndExceptions(packageAndMaybeConfiguration);
     if (env.valuesMissing()) {
       return null;
     }
     PackageValue packageValue = (PackageValue) packageAndMaybeConfigurationValues.get(packageKey);
+    if (packageValue == null) {
+      return null;
+    }
     Package pkg = packageValue.getPackage();
     if (configurationKeyMaybe != null) {
       configuration =
@@ -550,8 +552,8 @@ public final class ConfiguredTargetFunction implements SkyFunction {
     Rule rule = ((Rule) targetAndConfig.getTarget());
     BuildConfigurationValue configuration = targetAndConfig.getConfiguration();
 
-    ImmutableSet<Label> requiredDefaultToolchains =
-        rule.getRuleClassObject().getRequiredToolchains();
+    ImmutableSet<ToolchainTypeRequirement> toolchainTypes =
+        rule.getRuleClassObject().getToolchainTypes();
     // Collect local (target, rule) constraints for filtering out execution platforms.
     ImmutableSet<Label> defaultExecConstraintLabels =
         getExecutionPlatformConstraints(
@@ -559,7 +561,11 @@ public final class ConfiguredTargetFunction implements SkyFunction {
 
     // Create a merged version of the exec groups that handles exec group inheritance properly.
     ExecGroup defaultExecGroup =
-        ExecGroup.create(requiredDefaultToolchains, defaultExecConstraintLabels);
+        ExecGroup.builder()
+            .toolchainTypes(toolchainTypes)
+            .execCompatibleWith(defaultExecConstraintLabels)
+            .copyFrom(null)
+            .build();
     ExecGroupCollection.Builder execGroupCollectionBuilder =
         ExecGroupCollection.builder(defaultExecGroup, rule.getRuleClassObject().getExecGroups());
 
@@ -615,7 +621,7 @@ public final class ConfiguredTargetFunction implements SkyFunction {
     ToolchainContextKey.Builder toolchainContextKeyBuilder =
         ToolchainContextKey.key()
             .configurationKey(toolchainConfig)
-            .requiredToolchainTypeLabels(requiredDefaultToolchains)
+            .toolchainTypes(toolchainTypes)
             .execConstraintLabels(defaultExecConstraintLabels)
             .debugTarget(debugTarget);
 
@@ -633,14 +639,13 @@ public final class ConfiguredTargetFunction implements SkyFunction {
           name,
           ToolchainContextKey.key()
               .configurationKey(toolchainConfig)
-              .requiredToolchainTypeLabels(execGroup.requiredToolchains())
+              .toolchainTypes(execGroup.toolchainTypes())
               .execConstraintLabels(execGroup.execCompatibleWith())
               .debugTarget(debugTarget)
               .build());
     }
 
-    Map<SkyKey, ValueOrException<ToolchainException>> values =
-        env.getValuesOrThrow(toolchainContextKeys.values(), ToolchainException.class);
+    SkyframeLookupResult values = env.getValuesAndExceptions(toolchainContextKeys.values());
 
     boolean valuesMissing = env.valuesMissing();
 
@@ -649,7 +654,14 @@ public final class ConfiguredTargetFunction implements SkyFunction {
     for (Map.Entry<String, ToolchainContextKey> unloadedToolchainContextKey :
         toolchainContextKeys.entrySet()) {
       UnloadedToolchainContext unloadedToolchainContext =
-          (UnloadedToolchainContext) values.get(unloadedToolchainContextKey.getValue()).get();
+          (UnloadedToolchainContext)
+              values.getOrThrow(unloadedToolchainContextKey.getValue(), ToolchainException.class);
+      if (valuesMissing != env.valuesMissing()) {
+        BugReport.logUnexpected(
+            "Value for: '%s' was missing, this should never happen",
+            unloadedToolchainContextKey.getValue());
+        break;
+      }
       if (!valuesMissing) {
         String execGroup = unloadedToolchainContextKey.getKey();
         if (execGroup.equals(targetUnloadedToolchainContext)) {
@@ -661,7 +673,7 @@ public final class ConfiguredTargetFunction implements SkyFunction {
     }
 
     ComputedToolchainContexts result = new ComputedToolchainContexts();
-    result.toolchainCollection = valuesMissing ? null : toolchainContexts.build();
+    result.toolchainCollection = env.valuesMissing() ? null : toolchainContexts.build();
     result.execGroupCollectionBuilder = execGroupCollectionBuilder;
     return result;
   }
@@ -720,132 +732,143 @@ public final class ConfiguredTargetFunction implements SkyFunction {
       Iterable<Aspect> aspects,
       ImmutableMap<Label, ConfigMatchingProvider> configConditions,
       @Nullable ToolchainCollection<ToolchainContext> toolchainContexts,
-      boolean useToolchainTransition,
       RuleClassProvider ruleClassProvider,
       BuildConfigurationValue hostConfiguration)
       throws DependencyEvaluationException, ConfiguredValueCreationException,
           AspectCreationException, InterruptedException {
-    if (state.computeDependenciesResult != null) {
-      state.storedEventHandlerFromResolveConfigurations.replayOn(env.getListener());
-      return state.computeDependenciesResult;
-    }
+    try {
+      if (state.computeDependenciesResult != null) {
+        state.storedEventHandlerFromResolveConfigurations.replayOn(env.getListener());
+        return state.computeDependenciesResult;
+      }
 
-    OrderedSetMultimap<DependencyKind, Dependency> depValueNames;
-    if (state.resolveConfigurationsResult != null) {
-      depValueNames = state.resolveConfigurationsResult;
-    } else {
-      // Create the map from attributes to set of (target, transition) pairs.
-      OrderedSetMultimap<DependencyKind, DependencyKey> initialDependencies;
-      if (state.dependentNodeMapResult != null) {
-        initialDependencies = state.dependentNodeMapResult;
+      OrderedSetMultimap<DependencyKind, Dependency> depValueNames;
+      if (state.resolveConfigurationsResult != null) {
+        depValueNames = state.resolveConfigurationsResult;
       } else {
-        BuildConfigurationValue configuration = ctgValue.getConfiguration();
-        Label label = ctgValue.getLabel();
+        // Create the map from attributes to set of (target, transition) pairs.
+        OrderedSetMultimap<DependencyKind, DependencyKey> initialDependencies;
+        if (state.dependentNodeMapResult != null) {
+          initialDependencies = state.dependentNodeMapResult;
+        } else {
+          BuildConfigurationValue configuration = ctgValue.getConfiguration();
+          Label label = ctgValue.getLabel();
+          try {
+            initialDependencies =
+                resolver.dependentNodeMap(
+                    ctgValue,
+                    aspects,
+                    configConditions,
+                    toolchainContexts,
+                    transitiveRootCauses,
+                    ((ConfiguredRuleClassProvider) ruleClassProvider)
+                        .getTrimmingTransitionFactory());
+          } catch (DependencyResolver.Failure e) {
+            env.getListener()
+                .post(new AnalysisRootCauseEvent(configuration, label, e.getMessage()));
+            throw new DependencyEvaluationException(
+                new ConfiguredValueCreationException(
+                    e.getLocation(), e.getMessage(), label, configuration.getEventId(), null, null),
+                // These errors occur within DependencyResolver, which is attached to the current
+                // target. i.e. no dependent ConfiguredTargetFunction call happens to report its own
+                // error.
+                /*depReportedOwnError=*/ false);
+          } catch (InconsistentAspectOrderException e) {
+            throw new DependencyEvaluationException(e);
+          }
+          if (!env.valuesMissing()) {
+            state.dependentNodeMapResult = initialDependencies;
+          }
+        }
+        // Trim each dep's configuration so it only includes the fragments needed by its transitive
+        // closure.
+        ConfigurationResolver configResolver =
+            new ConfigurationResolver(env, ctgValue, hostConfiguration, configConditions);
+        StoredEventHandler storedEventHandler = new StoredEventHandler();
         try {
-          initialDependencies =
-              resolver.dependentNodeMap(
-                  ctgValue,
-                  aspects,
-                  configConditions,
-                  toolchainContexts,
-                  useToolchainTransition,
-                  transitiveRootCauses,
-                  ((ConfiguredRuleClassProvider) ruleClassProvider).getTrimmingTransitionFactory());
-        } catch (DependencyResolver.Failure e) {
-          env.getListener().post(new AnalysisRootCauseEvent(configuration, label, e.getMessage()));
-          throw new DependencyEvaluationException(
-              new ConfiguredValueCreationException(
-                  e.getLocation(), e.getMessage(), label, configuration.getEventId(), null, null),
-              // These errors occur within DependencyResolver, which is attached to the current
-              // target. i.e. no dependent ConfiguredTargetFunction call happens to report its own
-              // error.
-              /*depReportedOwnError=*/ false);
-        } catch (InconsistentAspectOrderException e) {
-          throw new DependencyEvaluationException(e);
+          depValueNames =
+              configResolver.resolveConfigurations(initialDependencies, storedEventHandler);
+        } catch (ConfiguredValueCreationException e) {
+          storedEventHandler.replayOn(env.getListener());
+          throw e;
         }
         if (!env.valuesMissing()) {
-          state.dependentNodeMapResult = initialDependencies;
+          state.resolveConfigurationsResult = depValueNames;
+          state.storedEventHandlerFromResolveConfigurations = storedEventHandler;
+
+          // We won't need this anymore.
+          state.dependentNodeMapResult = null;
         }
       }
-      // Trim each dep's configuration so it only includes the fragments needed by its transitive
-      // closure.
-      ConfigurationResolver configResolver =
-          new ConfigurationResolver(env, ctgValue, hostConfiguration, configConditions);
-      StoredEventHandler storedEventHandler = new StoredEventHandler();
+
+      // Return early in case packages were not loaded yet. In theory, we could start configuring
+      // dependent targets in loaded packages. However, that creates an artificial sync boundary
+      // between loading all dependent packages (fast) and configuring some dependent targets (can
+      // have a long tail).
+      if (env.valuesMissing()) {
+        return null;
+      }
+
+      // Resolve configured target dependencies and handle errors.
+      Map<SkyKey, ConfiguredTargetAndData> depValues;
+      if (state.resolveConfiguredTargetDependenciesResult != null) {
+        depValues = state.resolveConfiguredTargetDependenciesResult;
+      } else {
+        depValues =
+            resolveConfiguredTargetDependencies(
+                env,
+                ctgValue,
+                depValueNames.values(),
+                transitivePackagesForPackageRootResolution,
+                transitiveRootCauses);
+        if (env.valuesMissing()) {
+          return null;
+        }
+        state.resolveConfiguredTargetDependenciesResult = depValues;
+      }
+
+      // Resolve required aspects.
+      OrderedSetMultimap<Dependency, ConfiguredAspect> depAspects;
+      if (state.resolveAspectDependenciesResult != null) {
+        depAspects = state.resolveAspectDependenciesResult;
+      } else {
+        depAspects =
+            AspectResolver.resolveAspectDependencies(
+                env, depValues, depValueNames.values(), transitivePackagesForPackageRootResolution);
+        if (env.valuesMissing()) {
+          return null;
+        }
+        state.resolveAspectDependenciesResult = depAspects;
+      }
+
+      // Merge the dependent configured targets and aspects into a single map.
+      OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> mergeAspectsResult;
       try {
-        depValueNames =
-            configResolver.resolveConfigurations(initialDependencies, storedEventHandler);
-      } catch (ConfiguredValueCreationException e) {
-        storedEventHandler.replayOn(env.getListener());
-        throw e;
+        mergeAspectsResult = AspectResolver.mergeAspects(depValueNames, depValues, depAspects);
+      } catch (DuplicateException e) {
+        throw new DependencyEvaluationException(
+            new ConfiguredValueCreationException(ctgValue, e.getMessage()),
+            /*depReportedOwnError=*/ false);
       }
-      if (!env.valuesMissing()) {
-        state.resolveConfigurationsResult = depValueNames;
-        state.storedEventHandlerFromResolveConfigurations = storedEventHandler;
+      state.computeDependenciesResult = mergeAspectsResult;
+      state.storedEventHandlerFromResolveConfigurations.replayOn(env.getListener());
 
-        // We won't need this anymore.
-        state.dependentNodeMapResult = null;
-      }
-    }
+      // We won't need these anymore.
+      state.resolveConfigurationsResult = null;
+      state.resolveConfiguredTargetDependenciesResult = null;
+      state.resolveAspectDependenciesResult = null;
 
-    // Return early in case packages were not loaded yet. In theory, we could start configuring
-    // dependent targets in loaded packages. However, that creates an artificial sync boundary
-    // between loading all dependent packages (fast) and configuring some dependent targets (can
-    // have a long tail).
-    if (env.valuesMissing()) {
-      return null;
-    }
-
-    // Resolve configured target dependencies and handle errors.
-    Map<SkyKey, ConfiguredTargetAndData> depValues;
-    if (state.resolveConfiguredTargetDependenciesResult != null) {
-      depValues = state.resolveConfiguredTargetDependenciesResult;
-    } else {
-      depValues =
-          resolveConfiguredTargetDependencies(
-              env,
-              ctgValue,
-              depValueNames.values(),
-              transitivePackagesForPackageRootResolution,
-              transitiveRootCauses);
-      if (env.valuesMissing()) {
+      return mergeAspectsResult;
+    } catch (InterruptedException e) {
+      // In practice, this comes from resolveConfigurations: other InterruptedExceptions are
+      // declared for Skyframe value retrievals, which don't throw in reality.
+      if (!transitiveRootCauses.isEmpty()) {
+        // Allow caller to throw, don't prioritize interrupt: we may be error bubbling.
+        Thread.currentThread().interrupt();
         return null;
       }
-      state.resolveConfiguredTargetDependenciesResult = depValues;
+      throw e;
     }
-
-    // Resolve required aspects.
-    OrderedSetMultimap<Dependency, ConfiguredAspect> depAspects;
-    if (state.resolveAspectDependenciesResult != null) {
-      depAspects = state.resolveAspectDependenciesResult;
-    } else {
-      depAspects =
-          AspectResolver.resolveAspectDependencies(
-              env, depValues, depValueNames.values(), transitivePackagesForPackageRootResolution);
-      if (env.valuesMissing()) {
-        return null;
-      }
-      state.resolveAspectDependenciesResult = depAspects;
-    }
-
-    // Merge the dependent configured targets and aspects into a single map.
-    OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> mergeAspectsResult;
-    try {
-      mergeAspectsResult = AspectResolver.mergeAspects(depValueNames, depValues, depAspects);
-    } catch (DuplicateException e) {
-      throw new DependencyEvaluationException(
-          new ConfiguredValueCreationException(ctgValue, e.getMessage()),
-          /*depReportedOwnError=*/ false);
-    }
-    state.computeDependenciesResult = mergeAspectsResult;
-    state.storedEventHandlerFromResolveConfigurations.replayOn(env.getListener());
-
-    // We won't need these anymore.
-    state.resolveConfigurationsResult = null;
-    state.resolveConfiguredTargetDependenciesResult = null;
-    state.resolveAspectDependenciesResult = null;
-
-    return mergeAspectsResult;
   }
 
   /**
@@ -936,12 +959,13 @@ public final class ConfiguredTargetFunction implements SkyFunction {
                 + String.format(
                     "To inspect the select(), run: bazel query --output=build %s.\n",
                     target.getLabel())
-                + "For more help, see https://docs.bazel.build/be/functions.html#select.\n\n";
+                + "For more help, see https://bazel.build/reference/be/functions#select.\n\n";
         throw new ConfiguredValueCreationException(ctgValue, message);
       }
     }
 
-    return ConfigConditions.create(asConfiguredTargets.build(), asConfigConditions.build());
+    return ConfigConditions.create(
+        asConfiguredTargets.buildOrThrow(), asConfigConditions.buildOrThrow());
   }
 
   /**
@@ -966,24 +990,28 @@ public final class ConfiguredTargetFunction implements SkyFunction {
     // associated Targets (and therefore associated Packages) don't correspond to their own Labels.
     // We don't know the associated Package until we fetch the ConfiguredTarget. Therefore, we have
     // to do a potential second pass, in which we fetch all the Packages for AliasConfiguredTargets.
-    Iterable<SkyKey> depKeys =
-        Iterables.concat(
-            Iterables.transform(deps, Dependency::getConfiguredTargetKey),
+    ImmutableSet<SkyKey> packageKeys =
+        ImmutableSet.copyOf(
             Iterables.transform(
                 deps, input -> PackageValue.key(input.getLabel().getPackageIdentifier())));
-    Map<SkyKey, ValueOrException<ConfiguredValueCreationException>> depValuesOrExceptions =
-        env.getValuesOrThrow(depKeys, ConfiguredValueCreationException.class);
+    Iterable<SkyKey> depKeys =
+        Iterables.concat(
+            Iterables.transform(deps, Dependency::getConfiguredTargetKey), packageKeys);
+    SkyframeLookupResult depValuesOrExceptions = env.getValuesAndExceptions(depKeys);
+    boolean depValuesMissingForDebugging = env.valuesMissing();
     Map<SkyKey, ConfiguredTargetAndData> result = Maps.newHashMapWithExpectedSize(deps.size());
     Set<SkyKey> aliasPackagesToFetch = new HashSet<>();
     List<Dependency> aliasDepsToRedo = new ArrayList<>();
-    Map<SkyKey, SkyValue> aliasPackageValues = null;
+    SkyframeLookupResult aliasPackageValues = null;
     Collection<Dependency> depsToProcess = deps;
     for (int i = 0; i < 2; i++) {
       for (Dependency dep : depsToProcess) {
         SkyKey key = dep.getConfiguredTargetKey();
         ConfiguredTargetValue depValue;
         try {
-          depValue = (ConfiguredTargetValue) depValuesOrExceptions.get(key).get();
+          depValue =
+              (ConfiguredTargetValue)
+                  depValuesOrExceptions.getOrThrow(key, ConfiguredValueCreationException.class);
         } catch (ConfiguredValueCreationException e) {
           transitiveRootCauses.addTransitive(e.getRootCauses());
           detailedExitCode =
@@ -995,6 +1023,14 @@ public final class ConfiguredTargetFunction implements SkyFunction {
           continue;
         }
         if (depValue == null) {
+          if (!depValuesMissingForDebugging) {
+            BugReport.logUnexpected(
+                "Unexpected exception: dep %s had null value, even though there were no values"
+                    + " missing in the initial fetch. That means it had an unexpected exception"
+                    + " type (not ConfiguredValueCreationException)",
+                dep);
+            depValuesMissingForDebugging = true;
+          }
           missedValues = true;
           continue;
         }
@@ -1004,18 +1040,17 @@ public final class ConfiguredTargetFunction implements SkyFunction {
         SkyKey packageKey = PackageValue.key(depLabel.getPackageIdentifier());
         PackageValue pkgValue;
         if (i == 0) {
-          ValueOrUntypedException packageResult = depValuesOrExceptions.get(packageKey);
-          if (packageResult == null) {
+          if (!packageKeys.contains(packageKey)) {
             aliasPackagesToFetch.add(packageKey);
             aliasDepsToRedo.add(dep);
             continue;
           } else {
-            pkgValue = (PackageValue) packageResult.getUnchecked();
+            pkgValue = (PackageValue) depValuesOrExceptions.get(packageKey);
             if (pkgValue == null) {
-              // In a race, the getValuesOrThrow call above may have retrieved the package before it
-              // was done but the configured target after it was done. Since SkyFunctionEnvironment
-              // may cache absent values, re-requesting it on this evaluation may be useless, just
-              // treat it as missing.
+              // In a race, the getValuesAndExceptions call above may have retrieved the package
+              // before it was done but the configured target after it was done. Since
+              // SkyFunctionEnvironment may cache absent values, re-requesting it on this evaluation
+              // may be useless, just treat it as missing.
               missedValues = true;
               continue;
             }
@@ -1057,7 +1092,7 @@ public final class ConfiguredTargetFunction implements SkyFunction {
       if (aliasDepsToRedo.isEmpty()) {
         break;
       }
-      aliasPackageValues = env.getValues(aliasPackagesToFetch);
+      aliasPackageValues = env.getValuesAndExceptions(aliasPackagesToFetch);
       depsToProcess = aliasDepsToRedo;
     }
 
@@ -1199,7 +1234,7 @@ public final class ConfiguredTargetFunction implements SkyFunction {
    * the user. Callers (like {@link BuildTool}) won't also report the error.
    */
   private static class ReportedException extends SkyFunctionException {
-    private ReportedException(ConfiguredValueCreationException e) {
+    ReportedException(ConfiguredValueCreationException e) {
       super(withoutMessage(e), Transience.PERSISTENT);
     }
 
@@ -1221,7 +1256,7 @@ public final class ConfiguredTargetFunction implements SkyFunction {
    * user. Callers (like {@link BuildTool}) are responsible for reporting the error.
    */
   private static class UnreportedException extends SkyFunctionException {
-    private UnreportedException(ConfiguredValueCreationException e) {
+    UnreportedException(ConfiguredValueCreationException e) {
       super(e, Transience.PERSISTENT);
     }
   }

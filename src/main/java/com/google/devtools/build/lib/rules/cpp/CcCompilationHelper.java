@@ -291,7 +291,7 @@ public final class CcCompilationHelper {
   private String stripIncludePrefix = null;
   private String includePrefix = null;
 
-  // This context is built out of deps and implementation_deps.
+  // This context is built out of interface deps and implementation deps.
   private CcCompilationContext ccCompilationContext;
 
   private final RuleErrorConsumer ruleErrorConsumer;
@@ -390,21 +390,6 @@ public final class CcCompilationHelper {
   }
 
   /**
-   * Adds headers that are compiled into a separate module (when using C++ modules). The idea here
-   * is that a single (generated) library might want to create headers of very different transitive
-   * dependency size. In this case, building headers with very few transitive dependencies into a
-   * separate module can drastrically improve build performance of that module and its users.
-   *
-   * <p>Headers in this separate module must not include any of the regular headers.
-   *
-   * <p>THIS IS AN EXPERIMENTAL FACILITY THAT MIGHT GO AWAY.
-   */
-  public CcCompilationHelper addSeparateModuleHeaders(Collection<Artifact> headers) {
-    separateModuleHeaders.addAll(headers);
-    return this;
-  }
-
-  /**
    * Adds {@code headers} as public header files. These files will be made visible to dependent
    * rules. They may be parsed/preprocessed or compiled into a header module depending on the
    * configuration.
@@ -423,6 +408,21 @@ public final class CcCompilationHelper {
     for (Pair<Artifact, Label> header : headers) {
       addHeader(header.first, header.second);
     }
+    return this;
+  }
+
+  /**
+   * Adds headers that are compiled into a separate module (when using C++ modules). The idea here
+   * is that a single (generated) library might want to create headers of very different transitive
+   * dependency size. In this case, building headers with very few transitive dependencies into a
+   * separate module can drastrically improve build performance of that module and its users.
+   *
+   * <p>Headers in this separate module must not include any of the regular headers.
+   *
+   * <p>THIS IS AN EXPERIMENTAL FACILITY THAT MIGHT GO AWAY.
+   */
+  public CcCompilationHelper addSeparateModuleHeaders(Collection<Artifact> headers) {
+    separateModuleHeaders.addAll(headers);
     return this;
   }
 
@@ -861,7 +861,7 @@ public final class CcCompilationHelper {
     outputGroupsBuilder.putAll(
         CcCommon.createSaveFeatureStateArtifacts(
             cppConfiguration, featureConfiguration, ruleContext));
-    return outputGroupsBuilder.build();
+    return outputGroupsBuilder.buildOrThrow();
   }
 
   private static NestedSet<Artifact> collectLibraryHiddenTopLevelArtifacts(
@@ -982,7 +982,8 @@ public final class CcCompilationHelper {
                 actionConstructionContext.getActionOwner(),
                 originalHeader,
                 virtualHeader,
-                "Symlinking virtual headers for " + label));
+                "Symlinking virtual headers for " + label,
+                /*useExecRootForSource=*/ true));
         moduleHeadersBuilder.add(virtualHeader);
         if (configuration.isCodeCoverageEnabled()) {
           virtualToOriginalHeaders.add(
@@ -1241,7 +1242,7 @@ public final class CcCompilationHelper {
     ImmutableList.Builder<CppModuleMap> builder = ImmutableList.<CppModuleMap>builder();
     // TODO(bazel-team): Here we use the implementationDeps to build the dependents of this rule's
     // module map. This is technically incorrect for the following reasons:
-    //  - Clang will not issue a layering_check warning if headers from implementation_deps are
+    //  - Clang will not issue a layering_check warning if headers from implementation deps are
     //    included from headers of this library.
     //  - If we were to ever build with modules, Clang might store this dependency inside the .pcm
     // It should be evaluated whether this is ok.  If this turned into a problem at some
@@ -1352,7 +1353,7 @@ public final class CcCompilationHelper {
       builder.put(source, outputName);
     }
 
-    return builder.build();
+    return builder.buildOrThrow();
   }
 
   /**
@@ -1372,7 +1373,7 @@ public final class CcCompilationHelper {
     builder.putAll(
         calculateOutputNameMap(
             getSourceArtifactsByType(sources, CppSource.Type.CLIF_INPUT_PROTO), prefixDir));
-    return builder.build();
+    return builder.buildOrThrow();
   }
 
   private NestedSet<Artifact> getSourceArtifactsByType(

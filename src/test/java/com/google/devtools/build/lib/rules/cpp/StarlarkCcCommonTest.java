@@ -6745,35 +6745,6 @@ public class StarlarkCcCommonTest extends BuildViewTestCase {
         .containsExactly("object.pic.o");
   }
 
-  @Test
-  public void testObjectFilesInCreateLibraryWithoutStaticLibrary() throws Exception {
-    setUpCcLinkingContextTest(true);
-    scratch.file(
-        "b/BUILD",
-        "load('//tools/build_defs/cc:rule.bzl', 'crule')",
-        "crule(name='import_objects_no_lib',",
-        "   objects = ['object.o'],",
-        ")");
-
-    checkError(
-        "//b:import_objects_no_lib", "If you pass 'objects' you must also pass a 'static_library'");
-  }
-
-  @Test
-  public void testObjectFilesInCreateLibraryWithoutPicStaticLibrary() throws Exception {
-    setUpCcLinkingContextTest(true);
-    scratch.file(
-        "b/BUILD",
-        "load('//tools/build_defs/cc:rule.bzl', 'crule')",
-        "crule(name='import_objects_no_pic_lib',",
-        "   pic_objects = ['object.pic.o'],",
-        ")");
-
-    checkError(
-        "//b:import_objects_no_pic_lib",
-        "If you pass 'pic_objects' you must also pass a 'pic_static_library'");
-  }
-
   private void setupDebugPackageProviderTest(String fission) throws Exception {
     getAnalysisMock()
         .ccSupport()
@@ -7007,7 +6978,7 @@ public class StarlarkCcCommonTest extends BuildViewTestCase {
             "build_test_dwp()",
             "grte_top()",
             "enable_legacy_cc_provider()",
-            "experimental_cc_implementation_deps()",
+            "experimental_cc_interface_deps()",
             "share_native_deps()",
             "experimental_platform_cc_test()");
     scratch.file(
@@ -7109,12 +7080,19 @@ public class StarlarkCcCommonTest extends BuildViewTestCase {
   public void testExpandedCcCompilationContextApiBlocked() throws Exception {
     scratch.file(
         "b/BUILD",
-        "load('//my_rules:rule.bzl', 'method_rule', 'param_2_rule')",
+        "load('//my_rules:rule.bzl', 'method_rule', 'param_2_rule', 'additional_inputs_rule',"
+            + " 'transitive_modules_rule')",
         "param_2_rule(",
         "  name = 'p2',",
         ")",
         "method_rule(",
         "  name = 'm',",
+        ")",
+        "additional_inputs_rule(",
+        "  name = 'ai',",
+        ")",
+        "transitive_modules_rule(",
+        "  name = 'tm',",
         ")");
     scratch.file("my_rules/BUILD");
     scratch.file(
@@ -7126,15 +7104,29 @@ public class StarlarkCcCommonTest extends BuildViewTestCase {
         "def _p2_impl(ctx):",
         "  comp_context = cc_common.create_compilation_context(purpose = 'testing')",
         "  return [CcInfo(compilation_context = comp_context)]",
+        "def _additional_inputs_impl(ctx):",
+        "  comp_context = cc_common.create_compilation_context()",
+        "  comp_context.additional_inputs()",
+        "def _transitive_modules_impl(ctx):",
+        "  comp_context = cc_common.create_compilation_context()",
+        "  comp_context.transitive_modules(use_pic = True)",
         "method_rule = rule(",
         "  implementation = _m_impl,",
         ")",
         "param_2_rule = rule(",
-        "  implementation = _p2_impl,",
+        "  implementation = _p2_impl)",
+        "additional_inputs_rule = rule(",
+        "  implementation = _additional_inputs_impl)",
+        "transitive_modules_rule = rule(",
+        "  implementation = _transitive_modules_impl",
         ")");
     AssertionError e = assertThrows(AssertionError.class, () -> getConfiguredTarget("//b:m"));
     assertThat(e).hasMessageThat().contains("Rule in 'my_rules' cannot use private API");
     e = assertThrows(AssertionError.class, () -> getConfiguredTarget("//b:p2"));
+    assertThat(e).hasMessageThat().contains("Rule in 'my_rules' cannot use private API");
+    e = assertThrows(AssertionError.class, () -> getConfiguredTarget("//b:ai"));
+    assertThat(e).hasMessageThat().contains("Rule in 'my_rules' cannot use private API");
+    e = assertThrows(AssertionError.class, () -> getConfiguredTarget("//b:tm"));
     assertThat(e).hasMessageThat().contains("Rule in 'my_rules' cannot use private API");
   }
 

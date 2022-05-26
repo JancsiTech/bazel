@@ -37,7 +37,6 @@ import com.google.devtools.build.lib.analysis.DependencyKind;
 import com.google.devtools.build.lib.analysis.DuplicateException;
 import com.google.devtools.build.lib.analysis.ExecGroupCollection.InvalidExecGroupException;
 import com.google.devtools.build.lib.analysis.InconsistentAspectOrderException;
-import com.google.devtools.build.lib.analysis.PlatformOptions;
 import com.google.devtools.build.lib.analysis.ResolvedToolchainContext;
 import com.google.devtools.build.lib.analysis.TargetAndConfiguration;
 import com.google.devtools.build.lib.analysis.ToolchainCollection;
@@ -51,6 +50,7 @@ import com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTr
 import com.google.devtools.build.lib.analysis.config.transitions.NoTransition;
 import com.google.devtools.build.lib.analysis.configuredtargets.MergedConfiguredTarget;
 import com.google.devtools.build.lib.analysis.starlark.StarlarkTransition.TransitionException;
+import com.google.devtools.build.lib.bugreport.BugReport;
 import com.google.devtools.build.lib.causes.Cause;
 import com.google.devtools.build.lib.causes.LabelCause;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -60,7 +60,6 @@ import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.StoredEventHandler;
 import com.google.devtools.build.lib.packages.Aspect;
-import com.google.devtools.build.lib.packages.AspectDefinition;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.BuildFileContainsErrorsException;
 import com.google.devtools.build.lib.packages.NativeAspectClass;
@@ -86,11 +85,9 @@ import com.google.devtools.build.skyframe.SkyFunction.Environment.SkyKeyComputeS
 import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
-import com.google.devtools.build.skyframe.ValueOrException2;
-import com.google.devtools.build.skyframe.ValueOrUntypedException;
+import com.google.devtools.build.skyframe.SkyframeLookupResult;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import javax.annotation.Nullable;
 import net.starlark.java.eval.StarlarkSemantics;
@@ -240,7 +237,7 @@ final class AspectFunction implements SkyFunction {
     } else {
       LinkedHashSet<AspectKey> orderedKeys = new LinkedHashSet<>();
       collectAspectKeysInTopologicalOrder(key.getBaseKeys(), orderedKeys);
-      Map<SkyKey, SkyValue> aspectValues = env.getValues(orderedKeys);
+      SkyframeLookupResult aspectValues = env.getValuesAndExceptions(orderedKeys);
       if (env.valuesMissing()) {
         return null;
       }
@@ -248,6 +245,11 @@ final class AspectFunction implements SkyFunction {
           ImmutableList.builderWithExpectedSize(orderedKeys.size() + 1);
       for (AspectKey aspectKey : orderedKeys) {
         AspectValue aspectValue = (AspectValue) aspectValues.get(aspectKey);
+        if (aspectValue == null) {
+          BugReport.logUnexpected(
+              "aspectValue for: '%s' was missing, this should never happen", aspectKey);
+          return null;
+        }
         topologicalAspectPathBuilder.add(aspectValue.getAspect());
       }
       topologicalAspectPath = topologicalAspectPathBuilder.add(aspect).build();
@@ -305,7 +307,6 @@ final class AspectFunction implements SkyFunction {
                     : ToolchainCollection.builder()
                         .addDefaultContext(unloadedToolchainContext)
                         .build(),
-                shouldUseToolchainTransition(configuration, aspect.getDefinition()),
                 ruleClassProvider,
                 buildViewProvider.getSkyframeBuildView().getHostConfiguration());
       } catch (ConfiguredValueCreationException e) {
@@ -391,7 +392,7 @@ final class AspectFunction implements SkyFunction {
     }
   }
 
-  static SkyKey bzlLoadKeyForStarlarkAspect(StarlarkAspectClass starlarkAspectClass) {
+  static BzlLoadValue.Key bzlLoadKeyForStarlarkAspect(StarlarkAspectClass starlarkAspectClass) {
     Label extensionLabel = starlarkAspectClass.getExtensionLabel();
     return StarlarkBuiltinsValue.isBuiltinsRepo(extensionLabel.getRepository())
         ? BzlLoadValue.keyForBuiltins(extensionLabel)
@@ -410,7 +411,7 @@ final class AspectFunction implements SkyFunction {
     SkyKey basePackageKey =
         PackageValue.key(key.getBaseConfiguredTargetKey().getLabel().getPackageIdentifier());
     SkyKey configurationKey = key.getConfigurationKey();
-    SkyKey bzlLoadKey;
+    BzlLoadValue.Key bzlLoadKey;
 
     if (key.getAspectClass() instanceof NativeAspectClass) {
       NativeAspectClass nativeAspectClass = (NativeAspectClass) key.getAspectClass();
@@ -433,12 +434,7 @@ final class AspectFunction implements SkyFunction {
     if (bzlLoadKey != null) {
       initialKeys.add(bzlLoadKey);
     }
-    Map<SkyKey, ValueOrException2<BzlLoadFailedException, ConfiguredValueCreationException>>
-        initialValues =
-            env.getValuesOrThrow(
-                initialKeys.build(),
-                BzlLoadFailedException.class,
-                ConfiguredValueCreationException.class);
+    SkyframeLookupResult initialValues = env.getValuesAndExceptions(initialKeys.build());
     if (env.valuesMissing()) {
       return null;
     }
@@ -446,9 +442,20 @@ final class AspectFunction implements SkyFunction {
     if (starlarkAspectClass != null) {
       StarlarkDefinedAspect starlarkAspect;
       try {
-        starlarkAspect =
-            Preconditions.checkNotNull(
-                loadStarlarkAspect(starlarkAspectClass, initialValues.get(bzlLoadKey)));
+        BzlLoadValue bzlLoadvalue;
+        try {
+          bzlLoadvalue =
+              (BzlLoadValue) initialValues.getOrThrow(bzlLoadKey, BzlLoadFailedException.class);
+          if (bzlLoadvalue == null) {
+            BugReport.logUnexpected(
+                "Unexpected exception with %s and AspectKey %s", bzlLoadKey, key);
+            return null;
+          }
+        } catch (BzlLoadFailedException e) {
+          throw new AspectCreationException(
+              e.getMessage(), starlarkAspectClass.getExtensionLabel(), e.getDetailedExitCode());
+        }
+        starlarkAspect = loadAspectFromBzl(starlarkAspectClass, bzlLoadvalue);
       } catch (AspectCreationException e) {
         env.getListener().handle(Event.error(e.getMessage()));
         throw new AspectFunctionException(e);
@@ -462,7 +469,7 @@ final class AspectFunction implements SkyFunction {
     }
 
     // Keep this in sync with the same code in ConfiguredTargetFunction.
-    PackageValue aspectPackage = (PackageValue) initialValues.get(aspectPackageKey).getUnchecked();
+    PackageValue aspectPackage = (PackageValue) initialValues.get(aspectPackageKey);
     if (aspectPackage.getPackage().containsErrors()) {
       throw new AspectFunctionException(
           new BuildFileContainsErrorsException(key.getLabel().getPackageIdentifier()));
@@ -472,9 +479,13 @@ final class AspectFunction implements SkyFunction {
     try {
       baseConfiguredTargetValue =
           (ConfiguredTargetValue)
-              initialValues
-                  .get(baseConfiguredTargetKey)
-                  .getOrThrow(ConfiguredValueCreationException.class);
+              initialValues.getOrThrow(
+                  baseConfiguredTargetKey, ConfiguredValueCreationException.class);
+      if (baseConfiguredTargetValue == null) {
+        BugReport.logUnexpected(
+            "Unexpected exception with %s and AspectKey %s", baseConfiguredTargetKey, key);
+        return null;
+      }
     } catch (ConfiguredValueCreationException e) {
       throw new AspectFunctionException(
           new AspectCreationException(e.getMessage(), e.getRootCauses(), e.getDetailedExitCode()));
@@ -490,9 +501,9 @@ final class AspectFunction implements SkyFunction {
     BuildConfigurationValue configuration =
         configurationKey == null
             ? null
-            : (BuildConfigurationValue) initialValues.get(configurationKey).getUnchecked();
+            : (BuildConfigurationValue) initialValues.get(configurationKey);
 
-    PackageValue basePackage = (PackageValue) initialValues.get(basePackageKey).getUnchecked();
+    PackageValue basePackage = (PackageValue) initialValues.get(basePackageKey);
     Target target;
     try {
       target = basePackage.getPackage().getTarget(associatedTarget.getOriginalLabel().getName());
@@ -526,24 +537,6 @@ final class AspectFunction implements SkyFunction {
   }
 
   @Nullable
-  private static StarlarkDefinedAspect loadStarlarkAspect(
-      StarlarkAspectClass starlarkAspectClass, ValueOrUntypedException bzlLoadValueOrException)
-      throws AspectCreationException {
-    BzlLoadValue bzlLoadValue;
-    try {
-      bzlLoadValue =
-          (BzlLoadValue) bzlLoadValueOrException.getOrThrow(BzlLoadFailedException.class);
-    } catch (BzlLoadFailedException e) {
-      throw new AspectCreationException(
-          e.getMessage(), starlarkAspectClass.getExtensionLabel(), e.getDetailedExitCode());
-    }
-    if (bzlLoadValue == null) {
-      return null;
-    }
-    return loadAspectFromBzl(starlarkAspectClass, bzlLoadValue);
-  }
-
-  @Nullable
   private static UnloadedToolchainContext getUnloadedToolchainContext(
       Environment env,
       AspectKey key,
@@ -556,13 +549,12 @@ final class AspectFunction implements SkyFunction {
       // Configuration can be null in the case of aspects applied to input files. In this case,
       // there are no chances of toolchains being used, so skip it.
       try {
-        ImmutableSet<Label> requiredToolchains = aspect.getDefinition().getRequiredToolchains();
         unloadedToolchainContext =
             (UnloadedToolchainContext)
                 env.getValueOrThrow(
                     ToolchainContextKey.key()
                         .configurationKey(configuration.getKey())
-                        .requiredToolchainTypeLabels(requiredToolchains)
+                        .toolchainTypes(aspect.getDefinition().getToolchainTypes())
                         .build(),
                     ToolchainException.class);
       } catch (ToolchainException e) {
@@ -575,25 +567,6 @@ final class AspectFunction implements SkyFunction {
       return null;
     }
     return unloadedToolchainContext;
-  }
-
-  /**
-   * Returns whether or not to use the new toolchain transition. Checks the global incompatible
-   * change flag and the aspect's toolchain transition readiness attribute.
-   */
-  // TODO(#10523): Remove this when the migration period for toolchain transitions has ended.
-  private static boolean shouldUseToolchainTransition(
-      @Nullable BuildConfigurationValue configuration, AspectDefinition definition) {
-    // Check whether the global incompatible change flag is set.
-    if (configuration != null) {
-      PlatformOptions platformOptions = configuration.getOptions().get(PlatformOptions.class);
-      if (platformOptions != null && platformOptions.overrideToolchainTransition) {
-        return true;
-      }
-    }
-
-    // Check the aspect definition to see if it is ready.
-    return definition.useToolchainTransition();
   }
 
   /**

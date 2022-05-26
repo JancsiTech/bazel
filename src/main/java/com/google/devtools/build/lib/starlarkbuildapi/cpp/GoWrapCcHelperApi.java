@@ -79,16 +79,6 @@ public interface GoWrapCcHelperApi<
       throws EvalException, InterruptedException;
 
   @StarlarkMethod(
-      name = "get_arch_int_size",
-      doc = "",
-      documented = false,
-      parameters = {
-        @Param(name = "go", positional = false, named = true),
-      })
-  // TODO(b/113797843): Not written in Starlark because of GoCompilationHelper.
-  public int getArchIntSize(GoConfigurationT goConfig);
-
-  @StarlarkMethod(
       name = "collect_transitive_go_context_gopkg",
       doc = "",
       documented = false,
@@ -156,7 +146,7 @@ public interface GoWrapCcHelperApi<
       CcToolchainProviderT ccToolchainProvider,
       Sequence<?> srcs, // <FileT> expected
       Sequence<?> deps /* <TransitiveInfoCollectionT> expected */)
-      throws EvalException;
+      throws EvalException, InterruptedException;
 
   @StarlarkMethod(
       name = "create_go_compile_actions_gopkg",
@@ -173,7 +163,7 @@ public interface GoWrapCcHelperApi<
       CcToolchainProviderT ccToolchainProvider,
       Sequence<?> srcs, // <FileT> expected
       Sequence<?> deps /* <TransitiveInfoCollectionT> expected */)
-      throws EvalException;
+      throws EvalException, InterruptedException;
 
   @StarlarkMethod(
       name = "create_transitive_gopackage_info",

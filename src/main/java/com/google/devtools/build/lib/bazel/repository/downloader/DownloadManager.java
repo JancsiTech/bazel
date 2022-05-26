@@ -15,6 +15,7 @@
 package com.google.devtools.build.lib.bazel.repository.downloader;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Optional;
@@ -24,6 +25,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.bazel.repository.cache.RepositoryCache;
 import com.google.devtools.build.lib.bazel.repository.cache.RepositoryCache.KeyType;
 import com.google.devtools.build.lib.bazel.repository.cache.RepositoryCacheHitEvent;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
@@ -118,12 +120,14 @@ public class DownloadManager {
       canonicalId = originalUrls.stream().map(URL::toExternalForm).collect(Collectors.joining(" "));
     }
 
-    List<URL> rewrittenUrls = originalUrls;
+    ImmutableList<URL> rewrittenUrls = ImmutableList.copyOf(originalUrls);
     Map<URI, Map<String, String>> rewrittenAuthHeaders = authHeaders;
 
     if (rewriter != null) {
-      rewrittenUrls = rewriter.amend(originalUrls);
-      rewrittenAuthHeaders = rewriter.updateAuthHeaders(rewrittenUrls, authHeaders);
+      ImmutableList<UrlRewriter.RewrittenURL> rewrittenUrlMappings = rewriter.amend(originalUrls);
+      rewrittenUrls =
+          rewrittenUrlMappings.stream().map(url -> url.url()).collect(toImmutableList());
+      rewrittenAuthHeaders = rewriter.updateAuthHeaders(rewrittenUrlMappings, authHeaders);
     }
 
     URL mainUrl; // The "main" URL for this request
@@ -168,7 +172,9 @@ public class DownloadManager {
               repositoryCache.get(cacheKey, destination, cacheKeyType, canonicalId);
           if (cachedDestination != null) {
             // Cache hit!
-            eventHandler.post(new RepositoryCacheHitEvent(repo, cacheKey, mainUrl));
+            eventHandler.post(
+                new RepositoryCacheHitEvent(
+                    RepositoryName.createUnvalidated(repo), cacheKey, mainUrl));
             return cachedDestination;
           }
         } catch (IOException e) {
@@ -218,7 +224,7 @@ public class DownloadManager {
                       Event.warn("Failed to copy " + candidate + " to repository cache: " + e));
                 }
               }
-              FileSystemUtils.createDirectoryAndParents(destination.getParentDirectory());
+              destination.getParentDirectory().createDirectoryAndParents();
               FileSystemUtils.copyFile(candidate, destination);
               return destination;
             }

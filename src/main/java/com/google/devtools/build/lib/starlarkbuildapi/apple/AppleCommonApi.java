@@ -87,7 +87,7 @@ public interface AppleCommonApi<
               + "<li><code>tvos_device</code></li>"
               + "<li><code>tvos_simulator</code></li>"
               + "<li><code>watchos_device</code></li>"
-              + "<li><code>watchos_device</code></li>"
+              + "<li><code>watchos_simulator</code></li>"
               + "</ul><p>"
               + "These values can be passed to methods that expect a platform, like "
               + "<a href='XcodeVersionConfig.html#sdk_version_for_platform'>"
@@ -143,18 +143,6 @@ public interface AppleCommonApi<
   ProviderApi getAppleDynamicFrameworkConstructor();
 
   @StarlarkMethod(
-      name = "AppleDylibBinary",
-      doc =
-          "The constructor/key for the <code>AppleDylibBinary</code> provider.<p>If a target"
-              + " propagates the <code>AppleDylibBinary</code> provider, use this as the key with"
-              + " which to retrieve it. Example:<br><pre class='language-python'>\n"
-              + "dep = ctx.attr.deps[0]\n"
-              + "p = dep[apple_common.AppleDylibBinary]\n"
-              + "</pre>",
-      structField = true)
-  ProviderApi getAppleDylibBinaryConstructor();
-
-  @StarlarkMethod(
       name = "AppleExecutableBinary",
       doc =
           "The constructor/key for the <code>AppleExecutableBinary</code> provider.<p>"
@@ -191,19 +179,6 @@ public interface AppleCommonApi<
               + "</pre>",
       structField = true)
   ProviderApi getAppleDebugOutputsConstructor();
-
-  @StarlarkMethod(
-      name = "AppleLoadableBundleBinary",
-      doc =
-          "The constructor/key for the <code>AppleLoadableBundleBinary</code> provider.<p>"
-              + "If a target propagates the <code>AppleLoadableBundleBinary</code> provider, "
-              + "use this as the key with which to retrieve it. Example:<br>"
-              + "<pre class='language-python'>\n"
-              + "dep = ctx.attr.deps[0]\n"
-              + "p = dep[apple_common.AppleLoadableBundleBinary]\n"
-              + "</pre>",
-      structField = true)
-  ProviderApi getAppleLoadableBundleBinaryConstructor();
 
   @StarlarkMethod(
       name = "apple_host_system_env",
@@ -357,9 +332,9 @@ public interface AppleCommonApi<
       name = "link_multi_arch_binary",
       doc =
           "Links a (potentially multi-architecture) binary targeting Apple platforms. This "
-              + "method comprises a bulk of the logic of the <code>apple_binary</code> rule, and "
-              + "is exposed as an API to iterate on migration of <code>apple_binary</code> to "
-              + "Starlark.\n"
+              + "method comprises a bulk of the logic of the Starlark <code>apple_binary</code> "
+              + "rule in the rules_apple domain and exists to aid in the migration of its "
+              + "linking logic to Starlark in rules_apple.\n"
               + "<p>This API is <b>highly experimental</b> and subject to change at any time. Do "
               + "not depend on the stability of this function at this time.",
       parameters = {
@@ -404,15 +379,6 @@ public interface AppleCommonApi<
                     + "If -1 (the default), then the behavior is determined by the --[no]stamp "
                     + "flag. This should be set to 0 when generating the executable output for "
                     + "test rules."),
-        // TODO(b/63092114): Remove should_lipo when the Apple BUILD rules no longer use it.
-        @Param(
-            name = "should_lipo",
-            named = true,
-            positional = false,
-            defaultValue = "False",
-            doc =
-                "No-op. Kept here for backwards compatibility. This field will be removed in a "
-                    + "future release.")
       },
       useStarlarkThread = true)
   // TODO(b/70937317): Iterate on, improve, and solidify this API.
@@ -422,8 +388,23 @@ public interface AppleCommonApi<
       Sequence<?> extraLinkopts, // <String> expected.
       Sequence<?> extraLinkInputs, // <? extends FileApi> expected.
       StarlarkInt stamp,
-      Boolean shouldLipo,
       StarlarkThread thread)
+      throws EvalException, InterruptedException;
+
+  @StarlarkMethod(
+      name = "link_multi_arch_static_library",
+      doc =
+          "Links a (potentially multi-architecture) static library targeting Apple platforms."
+              + " This method comprises a part of the <code>apple_static_library</code> rule logic,"
+              + " and is exposed as an API to iterate on XCFrameworks support on Starlark.\n"
+              + "<p>This API is <b>highly experimental</b> and subject to change at any time."
+              + " Do not depend on the stability of this function at this time.",
+      parameters = {
+        @Param(name = "ctx", named = true, positional = false, doc = "The Starlark rule context."),
+      },
+      useStarlarkThread = true)
+  StructApi linkMultiArchStaticLibrary(
+      StarlarkRuleContextT starlarkRuleContext, StarlarkThread thread)
       throws EvalException, InterruptedException;
 
   @StarlarkMethod(

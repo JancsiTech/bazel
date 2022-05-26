@@ -114,7 +114,7 @@ def cc_autoconf_impl(repository_ctx, overriden_tools = dict()):
         # container so skipping until we have proper tests for these platforms.
         repository_ctx.symlink(paths["@bazel_tools//tools/cpp:bsd_cc_toolchain_config.bzl"], "cc_toolchain_config.bzl")
         repository_ctx.symlink(paths["@bazel_tools//tools/cpp:BUILD.static.bsd"], "BUILD")
-    elif cpu_value == "x64_windows":
+    elif cpu_value in ["x64_windows", "arm64_windows"]:
         # TODO(ibiryukov): overriden_tools are only supported in configure_unix_toolchain.
         # We might want to add that to Windows too(at least for msys toolchain).
         configure_windows_toolchain(repository_ctx)
@@ -185,3 +185,9 @@ def cc_configure():
         # Use register_toolchain's target pattern expansion to register all toolchains in the package.
         "@local_config_cc_toolchains//:all",
     )
+
+def _cc_configure_extension_impl(ctx):
+    cc_autoconf_toolchains(name = "local_config_cc_toolchains")
+    cc_autoconf(name = "local_config_cc")
+
+cc_configure_extension = module_extension(implementation = _cc_configure_extension_impl)

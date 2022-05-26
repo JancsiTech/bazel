@@ -65,7 +65,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/rules/cpp",
         "//src/main/java/com/google/devtools/build/lib/rules/java:java-compilation",
         "//src/main/java/com/google/devtools/build/lib/shell",
-        "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec:serialization-constant",
         "//src/main/java/com/google/devtools/build/lib/util",
         "//src/main/java/com/google/devtools/build/lib/util:os",
@@ -101,10 +100,11 @@ gen_workspace_stanza(
         "remotejdk11_macos",
         "remotejdk11_macos_aarch64",
         "remotejdk11_win",
-        "remotejdk17_linux",
-        "remotejdk17_macos",
-        "remotejdk17_macos_aarch64",
-        "remotejdk17_win",
+        "remotejdk11_win_arm64",
+    ] + [
+        "remotejdk%s_%s" % (version, os)
+        for os in ("macos", "macos_aarch64", "linux", "win", "win_arm64")
+        for version in ("17", "18")
     ],
     template = "jdk.WORKSPACE.tmpl",
     visibility = ["//:__pkg__"],

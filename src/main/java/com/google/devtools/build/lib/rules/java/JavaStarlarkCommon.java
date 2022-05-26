@@ -23,16 +23,18 @@ import com.google.devtools.build.lib.analysis.configuredtargets.MergedConfigured
 import com.google.devtools.build.lib.analysis.platform.ConstraintValueInfo;
 import com.google.devtools.build.lib.analysis.starlark.StarlarkActionFactory;
 import com.google.devtools.build.lib.analysis.starlark.StarlarkRuleContext;
+import com.google.devtools.build.lib.cmdline.BazelModuleContext;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.packages.BazelModuleContext;
 import com.google.devtools.build.lib.packages.Provider;
 import com.google.devtools.build.lib.rules.cpp.CcInfo;
 import com.google.devtools.build.lib.rules.java.JavaRuleOutputJarsProvider.JavaOutput;
 import com.google.devtools.build.lib.starlarkbuildapi.core.ProviderApi;
 import com.google.devtools.build.lib.starlarkbuildapi.java.JavaCommonApi;
 import com.google.devtools.build.lib.starlarkbuildapi.java.JavaToolchainStarlarkApiProviderApi;
+import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import net.starlark.java.eval.EvalException;
 import net.starlark.java.eval.Module;
 import net.starlark.java.eval.Sequence;
@@ -88,6 +90,11 @@ public class JavaStarlarkCommon
       Boolean neverlink,
       Boolean enableAnnotationProcessing,
       Boolean enableCompileJarAction,
+      Boolean enableJSpecify,
+      boolean createOutputSourceJar,
+      Object injectingRuleKind,
+      Sequence<?> addExports, // <String> expected
+      Sequence<?> addOpens, // <String> expected
       StarlarkThread thread)
       throws EvalException, InterruptedException {
 
@@ -125,7 +132,11 @@ public class JavaStarlarkCommon
               .getImmutableList();
     }
     // checks for private API access
-    if (!enableCompileJarAction || !classpathResources.isEmpty()) {
+    if (!enableCompileJarAction
+        || !enableJSpecify
+        || !createOutputSourceJar
+        || !classpathResources.isEmpty()
+        || injectingRuleKind != Starlark.NONE) {
       checkPrivateAccess(thread);
     }
     return JavaInfoBuildHelper.getInstance()
@@ -158,7 +169,12 @@ public class JavaStarlarkCommon
             neverlink,
             enableAnnotationProcessing,
             enableCompileJarAction,
+            enableJSpecify,
+            createOutputSourceJar,
             javaSemantics,
+            injectingRuleKind,
+            Sequence.cast(addExports, String.class, "add_exports"),
+            Sequence.cast(addOpens, String.class, "add_opens"),
             thread);
   }
 
@@ -215,9 +231,20 @@ public class JavaStarlarkCommon
 
   @Override
   public JavaInfo mergeJavaProviders(
-      Sequence<?> providers, /* <JavaInfo> expected. */ StarlarkThread thread)
+      Sequence<?> providers, /* <JavaInfo> expected. */
+      Sequence<?> exports, /* <JavaInfo> expected. */
+      Sequence<?> runtimeDeps, /* <JavaInfo> expected. */
+      boolean includeSourceJarsFromExports,
+      StarlarkThread thread)
       throws EvalException {
-    return JavaInfo.merge(Sequence.cast(providers, JavaInfo.class, "providers"));
+    if (!exports.isEmpty() || !runtimeDeps.isEmpty() || includeSourceJarsFromExports) {
+      checkPrivateAccess(thread);
+    }
+    return JavaInfo.merge(
+        Sequence.cast(providers, JavaInfo.class, "providers"),
+        Sequence.cast(exports, JavaInfo.class, "exports"),
+        Sequence.cast(runtimeDeps, JavaInfo.class, "runtime_deps"),
+        includeSourceJarsFromExports);
   }
 
   // TODO(b/65113771): Remove this method because it's incorrect.
@@ -256,9 +283,12 @@ public class JavaStarlarkCommon
 
   @Override
   public JavaInfo addConstraints(JavaInfo javaInfo, Sequence<?> constraints) throws EvalException {
-    // No implementation in Bazel. This method not callable in Starlark except through
-    // (discouraged) use of --experimental_google_legacy_api.
-    return null;
+    List<String> constraintStrings = Sequence.cast(constraints, String.class, "constraints");
+    ImmutableList<String> mergedConstraints =
+        Stream.concat(javaInfo.getJavaConstraints().stream(), constraintStrings.stream())
+            .distinct()
+            .collect(toImmutableList());
+    return JavaInfo.Builder.copyOf(javaInfo).setJavaConstraints(mergedConstraints).build();
   }
 
   @Override
@@ -312,7 +342,7 @@ public class JavaStarlarkCommon
         ((BazelModuleContext) Module.ofInnermostEnclosingStarlarkFunction(thread).getClientData())
             .label();
     if (!PRIVATE_STARLARKIFACTION_ALLOWLIST.contains(label.getPackageName())
-        && !label.getPackageIdentifier().getRepository().toString().equals("@_builtins")) {
+        && !label.getPackageIdentifier().getRepository().getName().equals("_builtins")) {
       throw Starlark.errorf("Rule in '%s' cannot use private API", label.getPackageName());
     }
   }
@@ -357,7 +387,6 @@ public class JavaStarlarkCommon
         .addProvider(
             JavaSourceJarsProvider.class, javaInfo.getProvider(JavaSourceJarsProvider.class))
         .addProvider(JavaRuleOutputJarsProvider.class, ruleOutputs)
-        .addTransitiveOnlyRuntimeJars(javaInfo.getTransitiveOnlyRuntimeJars())
         .build();
   }
 

@@ -36,6 +36,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.analysis.config.ExecutionTransitionFactory;
+import com.google.devtools.build.lib.analysis.config.ToolchainTypeRequirement;
 import com.google.devtools.build.lib.analysis.test.InstrumentedFilesCollector.InstrumentationSpec;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.Attribute.LabelLateBoundDefault;
@@ -76,6 +77,16 @@ public class CppRuleClasses {
     return env.getToolsLabel(CppHelper.TOOLCHAIN_TYPE_LABEL);
   }
 
+  public static ToolchainTypeRequirement ccToolchainTypeRequirement(Label ccToolchainType) {
+    // TODO(https://github.com/bazelbuild/bazel/issues/14727): Evaluate whether this can be
+    // optional.
+    return ToolchainTypeRequirement.builder(ccToolchainType).mandatory(true).build();
+  }
+
+  public static ToolchainTypeRequirement ccToolchainTypeRequirement(RuleDefinitionEnvironment env) {
+    return ccToolchainTypeRequirement(CppRuleClasses.ccToolchainTypeAttribute(env));
+  }
+
   // Artifacts of these types are discarded from the 'hdrs' attribute in cc rules
   static final FileTypeSet DISALLOWED_HDRS_FILES =
       FileTypeSet.of(
@@ -99,7 +110,7 @@ public class CppRuleClasses {
               FileTypeSet.of(
                   CPP_SOURCE, C_SOURCE, CPP_HEADER, ASSEMBLER_WITH_C_PREPROCESSOR, ASSEMBLER))
           .withSourceAttributes("srcs", "hdrs")
-          .withDependencyAttributes("implementation_deps", "deps", "data");
+          .withDependencyAttributes("interface_deps", "deps", "data");
 
   /** Implicit outputs for cc_binary rules. */
   public static final SafeImplicitOutputsFunction CC_BINARY_STRIPPED =
@@ -277,6 +288,12 @@ public class CppRuleClasses {
 
   /** A string constant for enabling split functions for FDO implicitly. */
   public static final String ENABLE_FDO_SPLIT_FUNCTIONS = "enable_fdo_split_functions";
+
+  /** A string constant for the fsafdo feature. */
+  public static final String FSAFDO = "fsafdo";
+
+  /** A string constant for enabling fsafdo for AutoFDO implicitly. */
+  public static final String ENABLE_FSAFDO = "enable_fsafdo";
 
   /**
    * A string constant for allowing use of shared LTO backend actions for linkstatic tests building
@@ -457,6 +474,9 @@ public class CppRuleClasses {
    * A feature which indicates whether we are using the legacy_is_cc_test build variable behavior.
    */
   public static final String LEGACY_IS_CC_TEST_FEATURE_NAME = "legacy_is_cc_test";
+
+  /** Tag used to opt in into interface_deps behavior. */
+  public static final String INTERFACE_DEPS_TAG = "__INTERFACE_DEPS__";
 
   /** Ancestor for all rules that do include scanning. */
   public static final class CcIncludeScanningRule implements RuleDefinition {

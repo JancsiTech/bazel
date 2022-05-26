@@ -35,6 +35,7 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Ordering;
 import com.google.devtools.build.lib.analysis.config.Fragment;
+import com.google.devtools.build.lib.analysis.config.ToolchainTypeRequirement;
 import com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.PatchTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.SplitTransition;
@@ -48,7 +49,6 @@ import com.google.devtools.build.lib.events.NullEventHandler;
 import com.google.devtools.build.lib.packages.Attribute.ComputedDefault;
 import com.google.devtools.build.lib.packages.Attribute.StarlarkComputedDefaultTemplate;
 import com.google.devtools.build.lib.packages.Attribute.StarlarkComputedDefaultTemplate.CannotPrecomputeDefaultsException;
-import com.google.devtools.build.lib.packages.BuildType.LabelConversionContext;
 import com.google.devtools.build.lib.packages.BuildType.SelectorList;
 import com.google.devtools.build.lib.packages.ConfigurationFragmentPolicy.MissingFragmentPolicy;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
@@ -75,6 +75,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
 import net.starlark.java.eval.EvalException;
@@ -269,53 +270,19 @@ public class RuleClass {
     }
   }
 
-  /** Possible values for setting whether a rule uses the toolchain transition. */
-  public enum ToolchainTransitionMode {
-    /** The rule should use the toolchain transition. */
-    ENABLED,
-    /** The rule should not use the toolchain transition. */
-    DISABLED,
-    /** The rule should inherit the value from its parent rules. */
-    INHERIT;
-
-    /** Determine the correct value to use based on the current setting and the parent's value. */
-    ToolchainTransitionMode apply(String name, ToolchainTransitionMode parent) {
-      if (this == INHERIT) {
-        return parent;
-      } else if (parent == INHERIT) {
-        return this;
-      } else if (this != parent) {
-        throw new IllegalArgumentException(
-            String.format(
-                "Rule %s has useToolchainTransition set to %s, but the parent is trying to set it"
-                    + " to %s",
-                name, this, parent));
-      }
-      return this;
-    }
-
-    boolean isActive() {
-      switch (this) {
-        case ENABLED:
-          return true;
-        case DISABLED:
-          return false;
-        default:
-      }
-      return false; // Default is that toolchain transition is disabled.
-    }
-  }
-
   /** A factory or builder class for rule implementations. */
   public interface ConfiguredTargetFactory<
       TConfiguredTarget, TContext, TActionConflictException extends Throwable> {
     /**
-     * Returns a fully initialized configured target instance using the given context.
+     * Returns a fully initialized configured target instance using the given context, or {@code
+     * null} on certain rule errors (typically if {@code ruleContext.hasErrors()} becomes {@code
+     * true} while trying to create the target).
      *
      * @throws RuleErrorException if configured target creation could not be completed due to rule
      *     errors
      * @throws TActionConflictException if there were conflicts during action registration
      */
+    @Nullable
     TConfiguredTarget create(TContext ruleContext)
         throws InterruptedException, RuleErrorException, TActionConflictException;
 
@@ -832,9 +799,8 @@ public class RuleClass {
     private ThirdPartyLicenseExistencePolicy thirdPartyLicenseExistencePolicy;
 
     private final Map<String, Attribute> attributes = new LinkedHashMap<>();
-    private final Set<Label> requiredToolchains = new HashSet<>();
+    private final Set<ToolchainTypeRequirement> toolchainTypes = new HashSet<>();
     private ToolchainResolutionMode useToolchainResolution = ToolchainResolutionMode.INHERIT;
-    private ToolchainTransitionMode useToolchainTransition = ToolchainTransitionMode.INHERIT;
     private final Set<Label> executionPlatformConstraints = new HashSet<>();
     private OutputFile.Kind outputFileKind = OutputFile.Kind.FILE;
     private final Map<String, ExecGroup> execGroups = new HashMap<>();
@@ -869,11 +835,9 @@ public class RuleClass {
             .includeConfigurationFragmentsFrom(parent.getConfigurationFragmentPolicy());
         supportsConstraintChecking = parent.supportsConstraintChecking;
 
-        addRequiredToolchains(parent.getRequiredToolchains());
+        addToolchainTypes(parent.getToolchainTypes());
         this.useToolchainResolution =
             this.useToolchainResolution.apply(name, parent.useToolchainResolution);
-        this.useToolchainTransition =
-            this.useToolchainTransition.apply(name, parent.useToolchainTransition);
         addExecutionPlatformConstraints(parent.getExecutionPlatformConstraints());
         try {
           addExecGroups(parent.getExecGroups());
@@ -965,7 +929,6 @@ public class RuleClass {
         // Build setting rules should opt out of toolchain resolution, since they form part of the
         // configuration.
         this.useToolchainResolution(ToolchainResolutionMode.DISABLED);
-        this.useToolchainTransition(ToolchainTransitionMode.DISABLED);
       }
 
       return new RuleClass(
@@ -998,9 +961,8 @@ public class RuleClass {
           configurationFragmentPolicy.build(),
           supportsConstraintChecking,
           thirdPartyLicenseExistencePolicy,
-          requiredToolchains,
+          toolchainTypes,
           useToolchainResolution,
-          useToolchainTransition,
           executionPlatformConstraints,
           execGroups,
           outputFileKind,
@@ -1529,20 +1491,32 @@ public class RuleClass {
     }
 
     /**
-     * Causes rules of this type to require the specified toolchains be available via toolchain
+     * Cause rules of this type to request the specified toolchains be available via toolchain
      * resolution when a target is configured.
      */
-    public Builder addRequiredToolchains(Iterable<Label> toolchainLabels) {
-      Iterables.addAll(this.requiredToolchains, toolchainLabels);
+    public Builder addToolchainTypes(Iterable<ToolchainTypeRequirement> toolchainTypes) {
+      Iterables.addAll(this.toolchainTypes, toolchainTypes);
       return this;
+    }
+
+    /**
+     * Cause rules of this type to request the specified toolchains be available via toolchain
+     * resolution when a target is configured.
+     */
+    public Builder addToolchainTypes(ToolchainTypeRequirement... toolchainTypes) {
+      return addToolchainTypes(ImmutableList.copyOf(toolchainTypes));
     }
 
     /**
      * Causes rules of this type to require the specified toolchains be available via toolchain
      * resolution when a target is configured.
      */
-    public Builder addRequiredToolchains(Label... toolchainLabels) {
-      return this.addRequiredToolchains(Lists.newArrayList(toolchainLabels));
+    // TODO(katre): Remove this once all callers use addToolchainType.
+    public Builder addRequiredToolchains(Collection<Label> toolchainLabels) {
+      return this.addToolchainTypes(
+          toolchainLabels.stream()
+              .map(label -> ToolchainTypeRequirement.create(label))
+              .collect(Collectors.toList()));
     }
 
     /**
@@ -1598,11 +1572,6 @@ public class RuleClass {
      */
     public Builder useToolchainResolution(ToolchainResolutionMode mode) {
       this.useToolchainResolution = mode;
-      return this;
-    }
-
-    public Builder useToolchainTransition(ToolchainTransitionMode mode) {
-      this.useToolchainTransition = mode;
       return this;
     }
 
@@ -1757,9 +1726,8 @@ public class RuleClass {
 
   private final ThirdPartyLicenseExistencePolicy thirdPartyLicenseExistencePolicy;
 
-  private final ImmutableSet<Label> requiredToolchains;
+  private final ImmutableSet<ToolchainTypeRequirement> toolchainTypes;
   private final ToolchainResolutionMode useToolchainResolution;
-  private final ToolchainTransitionMode useToolchainTransition;
   private final ImmutableSet<Label> executionPlatformConstraints;
   private final ImmutableMap<String, ExecGroup> execGroups;
 
@@ -1814,9 +1782,8 @@ public class RuleClass {
       ConfigurationFragmentPolicy configurationFragmentPolicy,
       boolean supportsConstraintChecking,
       ThirdPartyLicenseExistencePolicy thirdPartyLicenseExistencePolicy,
-      Set<Label> requiredToolchains,
+      Set<ToolchainTypeRequirement> toolchainTypes,
       ToolchainResolutionMode useToolchainResolution,
-      ToolchainTransitionMode useToolchainTransition,
       Set<Label> executionPlatformConstraints,
       Map<String, ExecGroup> execGroups,
       OutputFile.Kind outputFileKind,
@@ -1855,9 +1822,8 @@ public class RuleClass {
     this.configurationFragmentPolicy = configurationFragmentPolicy;
     this.supportsConstraintChecking = supportsConstraintChecking;
     this.thirdPartyLicenseExistencePolicy = thirdPartyLicenseExistencePolicy;
-    this.requiredToolchains = ImmutableSet.copyOf(requiredToolchains);
+    this.toolchainTypes = ImmutableSet.copyOf(toolchainTypes);
     this.useToolchainResolution = useToolchainResolution;
-    this.useToolchainTransition = useToolchainTransition;
     this.executionPlatformConstraints = ImmutableSet.copyOf(executionPlatformConstraints);
     this.execGroups = ImmutableMap.copyOf(execGroups);
     this.buildSetting = buildSetting;
@@ -2182,7 +2148,7 @@ public class RuleClass {
       RepositoryMapping repositoryMapping,
       AttributeValues<T> attributeValues,
       Interner<ImmutableList<?>> listInterner,
-      HashMap<String, Label> convertedLabelsInPackage,
+      Map<String, Label> convertedLabelsInPackage,
       EventHandler eventHandler) {
     BitSet definedAttrIndices = new BitSet();
     for (T attributeAccessor : attributeValues.getAttributeAccessors()) {
@@ -2519,10 +2485,10 @@ public class RuleClass {
       Object buildLangValue,
       RepositoryMapping repositoryMapping,
       Interner<ImmutableList<?>> listInterner,
-      HashMap<String, Label> convertedLabelsInPackage)
+      Map<String, Label> convertedLabelsInPackage)
       throws ConversionException {
-    LabelConversionContext context =
-        new LabelConversionContext(rule.getLabel(), repositoryMapping, convertedLabelsInPackage);
+    LabelConverter context =
+        new LabelConverter(rule.getLabel(), repositoryMapping, convertedLabelsInPackage);
     Object converted =
         BuildType.selectableConvert(
             attr.getType(),
@@ -2769,8 +2735,8 @@ public class RuleClass {
     return ignoreLicenses;
   }
 
-  public ImmutableSet<Label> getRequiredToolchains() {
-    return requiredToolchains;
+  public ImmutableSet<ToolchainTypeRequirement> getToolchainTypes() {
+    return toolchainTypes;
   }
 
   /**
@@ -2779,10 +2745,6 @@ public class RuleClass {
    */
   ToolchainResolutionMode useToolchainResolution() {
     return this.useToolchainResolution;
-  }
-
-  public boolean useToolchainTransition() {
-    return this.useToolchainTransition.isActive();
   }
 
   public ImmutableSet<Label> getExecutionPlatformConstraints() {

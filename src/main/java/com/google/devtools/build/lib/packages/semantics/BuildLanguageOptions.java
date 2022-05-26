@@ -147,7 +147,7 @@ public final class BuildLanguageOptions extends OptionsBase {
 
   @Option(
       name = "incompatible_existing_rules_immutable_view",
-      defaultValue = "false",
+      defaultValue = "true",
       documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
       effectTags = {OptionEffectTag.BUILD_FILE_SEMANTICS, OptionEffectTag.LOADING_AND_ANALYSIS},
       metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
@@ -166,15 +166,6 @@ public final class BuildLanguageOptions extends OptionsBase {
           "If set to true, exposes a number of experimental pieces of Starlark build API "
               + "pertaining to Google legacy code.")
   public boolean experimentalGoogleLegacyApi;
-
-  @Option(
-      name = "experimental_ninja_actions",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
-      effectTags = {OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION},
-      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
-      help = "If set to true, enables Ninja execution functionality.")
-  public boolean experimentalNinjaActions;
 
   @Option(
       name = "experimental_platforms_api",
@@ -532,6 +523,26 @@ public final class BuildLanguageOptions extends OptionsBase {
               + " providers of the aspect.")
   public boolean incompatibleTopLevelAspectsRequireProviders;
 
+  @Option(
+      name = "incompatible_disable_starlark_host_transitions",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
+      metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
+      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
+      help =
+          "If set to true, rule attributes cannot set 'cfg = \"host\"'. Rules should set "
+              + "'cfg = \"exec\"' instead.")
+  public boolean incompatibleDisableStarlarkHostTransitions;
+
+  @Option(
+      name = "incompatible_disable_managed_directories",
+      defaultValue = "true",
+      documentationCategory = OptionDocumentationCategory.STARLARK_SEMANTICS,
+      metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
+      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
+      help = "If set to true, the workspace(managed_directories=) attribute is disabled.")
+  public boolean incompatibleDisableManagedDirectories;
+
   /**
    * An interner to reduce the number of StarlarkSemantics instances. A single Blaze instance should
    * never accumulate a large number of these and being able to shortcut on object identity makes a
@@ -556,7 +567,6 @@ public final class BuildLanguageOptions extends OptionsBase {
                 INCOMPATIBLE_EXISTING_RULES_IMMUTABLE_VIEW, incompatibleExistingRulesImmutableView)
             .setBool(EXPERIMENTAL_ACTION_RESOURCE_SET, experimentalActionResourceSet)
             .setBool(EXPERIMENTAL_GOOGLE_LEGACY_API, experimentalGoogleLegacyApi)
-            .setBool(EXPERIMENTAL_NINJA_ACTIONS, experimentalNinjaActions)
             .setBool(EXPERIMENTAL_PLATFORMS_API, experimentalPlatformsApi)
             .setBool(EXPERIMENTAL_CC_SHARED_LIBRARY, experimentalCcSharedLibrary)
             .setBool(EXPERIMENTAL_REPO_REMOTE_EXEC, experimentalRepoRemoteExec)
@@ -599,6 +609,10 @@ public final class BuildLanguageOptions extends OptionsBase {
             .setBool(
                 INCOMPATIBLE_TOP_LEVEL_ASPECTS_REQUIRE_PROVIDERS,
                 incompatibleTopLevelAspectsRequireProviders)
+            .setBool(
+                INCOMPATIBLE_DISABLE_STARLARK_HOST_TRANSITIONS,
+                incompatibleDisableStarlarkHostTransitions)
+            .setBool(INCOMPATIBLE_DISABLE_MANAGE_DIRECTORIES, incompatibleDisableManagedDirectories)
             .build();
     return INTERNER.intern(semantics);
   }
@@ -621,9 +635,8 @@ public final class BuildLanguageOptions extends OptionsBase {
   public static final String EXPERIMENTAL_ENABLE_ANDROID_MIGRATION_APIS =
       "-experimental_enable_android_migration_apis";
   public static final String INCOMPATIBLE_EXISTING_RULES_IMMUTABLE_VIEW =
-      "-incompatible_existing_rules_immutable_view";
+      "+incompatible_existing_rules_immutable_view";
   public static final String EXPERIMENTAL_GOOGLE_LEGACY_API = "-experimental_google_legacy_api";
-  public static final String EXPERIMENTAL_NINJA_ACTIONS = "-experimental_ninja_actions";
   public static final String EXPERIMENTAL_PLATFORMS_API = "-experimental_platforms_api";
   public static final String EXPERIMENTAL_REPO_REMOTE_EXEC = "-experimental_repo_remote_exec";
   public static final String EXPERIMENTAL_SIBLING_REPOSITORY_LAYOUT =
@@ -666,6 +679,10 @@ public final class BuildLanguageOptions extends OptionsBase {
       "-incompatible_visibility_private_attributes_at_definition";
   public static final String INCOMPATIBLE_TOP_LEVEL_ASPECTS_REQUIRE_PROVIDERS =
       "-incompatible_top_level_aspects_require_providers";
+  public static final String INCOMPATIBLE_DISABLE_STARLARK_HOST_TRANSITIONS =
+      "-incompatible_disable_starlark_host_transitions";
+  public static final String INCOMPATIBLE_DISABLE_MANAGE_DIRECTORIES =
+      "+incompatible_disable_managed_directories";
 
   // non-booleans
   public static final StarlarkSemantics.Key<String> EXPERIMENTAL_BUILTINS_BZL_PATH =

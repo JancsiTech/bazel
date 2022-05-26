@@ -40,7 +40,6 @@ import com.google.devtools.build.lib.analysis.test.InstrumentedFilesCollector;
 import com.google.devtools.build.lib.analysis.test.InstrumentedFilesInfo;
 import com.google.devtools.build.lib.analysis.test.TestActionBuilder;
 import com.google.devtools.build.lib.analysis.test.TestConfiguration;
-import com.google.devtools.build.lib.analysis.test.TestEnvironmentInfo;
 import com.google.devtools.build.lib.analysis.test.TestProvider;
 import com.google.devtools.build.lib.analysis.test.TestProvider.TestParams;
 import com.google.devtools.build.lib.analysis.test.TestTagsProvider;
@@ -87,7 +86,6 @@ public final class RuleConfiguredTargetBuilder {
 
   private final NestedSetBuilder<Artifact> filesToRunBuilder = NestedSetBuilder.stableOrder();
   private RunfilesSupport runfilesSupport;
-  private Runfiles persistentTestRunnerRunfiles;
   private Artifact executable;
   private final ImmutableSet<ActionAnalysisMetadata> actionsWithoutExtraAction = ImmutableSet.of();
 
@@ -193,7 +191,7 @@ public final class RuleConfiguredTargetBuilder {
         outputGroups.put(entry.getKey(), entry.getValue().build());
       }
 
-      OutputGroupInfo outputGroupInfo = new OutputGroupInfo(outputGroups.build());
+      OutputGroupInfo outputGroupInfo = new OutputGroupInfo(outputGroups.buildOrThrow());
       addNativeDeclaredProvider(outputGroupInfo);
     }
 
@@ -359,7 +357,7 @@ public final class RuleConfiguredTargetBuilder {
       Label rdeLabel =
           ruleContext.getRule().getRuleClassObject().getRuleDefinitionEnvironmentLabel();
       // only allow native and builtins to override transitive validation propagation
-      if (rdeLabel != null && !"@_builtins".equals(rdeLabel.getRepository().getName())) {
+      if (rdeLabel != null && !"@_builtins".equals(rdeLabel.getRepository().getNameWithAt())) {
         ruleContext.ruleError(rdeLabel + " cannot access the _transitive_validation private API");
         return;
       }
@@ -471,17 +469,16 @@ public final class RuleConfiguredTargetBuilder {
                     providersBuilder.getProvider(
                         InstrumentedFilesInfo.STARLARK_CONSTRUCTOR.getKey()));
 
-    TestEnvironmentInfo environmentProvider =
-        (TestEnvironmentInfo)
-            providersBuilder.getProvider(TestEnvironmentInfo.PROVIDER.getKey());
+    RunEnvironmentInfo environmentProvider =
+        (RunEnvironmentInfo) providersBuilder.getProvider(RunEnvironmentInfo.PROVIDER.getKey());
     if (environmentProvider != null) {
       testActionBuilder.addExtraEnv(environmentProvider.getEnvironment());
+      testActionBuilder.addExtraInheritedEnv(environmentProvider.getInheritedEnvironment());
     }
 
     TestParams testParams =
         testActionBuilder
             .setFilesToRunProvider(filesToRunProvider)
-            .setPersistentTestRunnerRunfiles(persistentTestRunnerRunfiles)
             .addTools(additionalTestActionTools.build())
             .setExecutionRequirements(
                 (ExecutionInfo) providersBuilder.getProvider(ExecutionInfo.PROVIDER.getKey()))
@@ -606,11 +603,6 @@ public final class RuleConfiguredTargetBuilder {
       RunfilesSupport runfilesSupport, Artifact executable) {
     this.runfilesSupport = runfilesSupport;
     this.executable = executable;
-    return this;
-  }
-
-  public RuleConfiguredTargetBuilder setPersistentTestRunnerRunfiles(Runfiles testSupportRunfiles) {
-    this.persistentTestRunnerRunfiles = testSupportRunfiles;
     return this;
   }
 

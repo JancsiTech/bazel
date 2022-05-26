@@ -63,6 +63,7 @@ import java.io.PrintWriter;
 import java.util.List;
 import java.util.Set;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 
 /**
@@ -77,6 +78,11 @@ public abstract class AbstractQueryTest<T> {
   protected static final ImmutableSet<?> EMPTY = ImmutableSet.of();
 
   private static final String DEFAULT_UNIVERSE = "//...:*";
+
+  protected static final String BAD_PACKAGE_NAME =
+      "package names may contain "
+          + "A-Z, a-z, 0-9, or any of ' !\"#$%&'()*+,-./;<=>?[]^_`{|}~' "
+          + "(most 7-bit ascii characters except 0-31, 127, ':', or '\\')";
 
   protected MockToolsConfig mockToolsConfig;
   protected QueryHelper<T> helper;
@@ -314,11 +320,7 @@ public abstract class AbstractQueryTest<T> {
   protected final void checkResultofBadTargetLiterals(String message, FailureDetail failureDetail) {
     assertThat(failureDetail.getTargetPatterns().getCode())
         .isEqualTo(TargetPatterns.Code.LABEL_SYNTAX_ERROR);
-    // TODO(bazel-team): This error message could use some improvement. It's verbose (duplicate
-    //   message) and shows an extra "@" that wasn't in the input.
-    assertThat(message)
-        .isEqualTo(
-            "Invalid package name 'bad:*': invalid package identifier '@//bad:*': contains ':'");
+    assertThat(message).isEqualTo("Invalid package name 'bad:*': " + BAD_PACKAGE_NAME);
   }
 
   @Test
@@ -593,6 +595,7 @@ public abstract class AbstractQueryTest<T> {
   }
 
   @Test
+  @Ignore("b/198254254")
   public void testDeps() throws Exception {
     writeBuildFiles3();
     writeBuildFilesWithConfigurableAttributes();
@@ -636,7 +639,8 @@ public abstract class AbstractQueryTest<T> {
                   helper.getToolsRepository()
                       + "//tools/cpp:malloc + //configurable:main + "
                       + "//configurable:main.cc + //configurable:adep + //configurable:bdep + "
-                      + "//configurable:defaultdep + //conditions:a + //conditions:b"
+                      + "//configurable:defaultdep + //conditions:a + //conditions:b + "
+                      + "//tools/cpp:toolchain_type + //tools/cpp:current_cc_toolchain"
                       + implicitDeps));
     }
   }
@@ -952,6 +956,7 @@ public abstract class AbstractQueryTest<T> {
   }
 
   @Test
+  @Ignore("b/198254254")
   public void testNoImplicitDeps() throws Exception {
     writeFile("x/BUILD", "cc_binary(name='x', srcs=['x.cc'])");
 
@@ -972,10 +977,11 @@ public abstract class AbstractQueryTest<T> {
     }
 
     String targetDepsExpr = "//x:x + //x:x.cc";
+    String toolchainDepsExpr = "//tools/cpp:toolchain_type + //tools/cpp:current_cc_toolchain";
 
     // Test all combinations of --[no]host_deps and --[no]implicit_deps on //x:x
     assertEqualsFiltered(
-        targetDepsExpr + " + " + hostDepsExpr + implicitDepsExpr,
+        targetDepsExpr + " + " + hostDepsExpr + implicitDepsExpr + " + " + toolchainDepsExpr,
         "deps(//x)" + TestConstants.CC_DEPENDENCY_CORRECTION);
     assertEqualsFiltered(
         targetDepsExpr + " + " + hostDepsExpr,
@@ -1353,7 +1359,7 @@ public abstract class AbstractQueryTest<T> {
     writeFile("y/BUILD");
 
     eval("//x:*");
-    helper.assertPackageNotLoaded("@//y");
+    helper.assertPackageNotLoaded("y");
   }
 
   // #1352570, "NPE crash in deps(x, n)".
@@ -1885,6 +1891,29 @@ public abstract class AbstractQueryTest<T> {
   }
 
   @Test
+  public void boundedDepsWithError() throws Exception {
+    writeFile(
+        "foo/BUILD",
+        "sh_library(name = 'foo', deps = [':dep'])",
+        "sh_library(name = 'dep', deps = ['//bar:missing'])");
+    assertThat(evalToListOfStrings("deps(//foo:foo, 1)")).containsExactly("//foo:foo", "//foo:dep");
+  }
+
+  // Ideally we wouldn't fail on an irrelevant error (since //bar:missing is a dep of //foo:dep,
+  // not an rdep). This test documents the current non-ideal behavior.
+  @Test
+  public void boundedRdepsWithError() throws Exception {
+    writeFile(
+        "foo/BUILD",
+        "sh_library(name = 'foo', deps = [':dep'])",
+        "sh_library(name = 'dep', deps = ['//bar:missing'])");
+    assertThat(
+            evalThrows("rdeps(//foo:foo, //foo:dep, 1)", /*unconditionallyThrows=*/ false)
+                .getMessage())
+        .contains("preloading transitive closure failed: no such package 'bar':");
+  }
+
+  @Test
   public void testEqualityOfOrderedThreadSafeImmutableSet() throws Exception {
     writeFile("foo/BUILD", "sh_library(name = 'a')", "sh_library(name = 'b')");
 
@@ -2069,8 +2098,8 @@ public abstract class AbstractQueryTest<T> {
    */
   public interface QueryHelper<T> {
 
-    @Before
     /** Basic set-up; this is called once at the beginning of a test, before anything else. */
+    @Before
     void setUp() throws Exception;
 
     void setKeepGoing(boolean keepGoing);

@@ -37,6 +37,11 @@ function is_absolute {
 # root.
 EXEC_ROOT="$PWD"
 
+# Declare that the executable is running in a `bazel test` environment
+# This allows test frameworks to enable output to the unprefixed environment variable
+# For example, if `BAZEL_TEST` and `XML_OUTPUT_FILE` are defined, write JUnit output
+export BAZEL_TEST=1
+
 # Bazel sets some environment vars to relative paths to improve caching and
 # support remote execution, where the absolute path may not be known to Bazel.
 # Convert them to absolute paths here before running the actual test.
@@ -54,8 +59,10 @@ is_absolute "$TEST_UNDECLARED_OUTPUTS_DIR" ||
   TEST_UNDECLARED_OUTPUTS_DIR="$PWD/$TEST_UNDECLARED_OUTPUTS_DIR"
 is_absolute "$TEST_UNDECLARED_OUTPUTS_MANIFEST" ||
   TEST_UNDECLARED_OUTPUTS_MANIFEST="$PWD/$TEST_UNDECLARED_OUTPUTS_MANIFEST"
-is_absolute "$TEST_UNDECLARED_OUTPUTS_ZIP" ||
-  TEST_UNDECLARED_OUTPUTS_ZIP="$PWD/$TEST_UNDECLARED_OUTPUTS_ZIP"
+if [[ -n "$TEST_UNDECLARED_OUTPUTS_ZIP" ]]; then
+  is_absolute "$TEST_UNDECLARED_OUTPUTS_ZIP" ||
+    TEST_UNDECLARED_OUTPUTS_ZIP="$PWD/$TEST_UNDECLARED_OUTPUTS_ZIP"
+fi
 is_absolute "$TEST_UNDECLARED_OUTPUTS_ANNOTATIONS" ||
   TEST_UNDECLARED_OUTPUTS_ANNOTATIONS="$PWD/$TEST_UNDECLARED_OUTPUTS_ANNOTATIONS"
 is_absolute "$TEST_UNDECLARED_OUTPUTS_ANNOTATIONS_DIR" ||
@@ -197,7 +204,7 @@ function write_xml_output_file {
       error_msg="<error message=\"exited with error code $exitCode\"></error>"
     fi
     test_name="${TEST_BINARY#./}"
-    test_name="${TEST_BINARY#../}"
+    test_name="${test_name#../}"
     # Ensure that test shards have unique names in the xml output.
     if [[ -n "${TEST_TOTAL_SHARDS+x}" ]] && ((TEST_TOTAL_SHARDS != 0)); then
       ((shard_num=TEST_SHARD_INDEX+1))
@@ -414,7 +421,8 @@ if [[ -n "$TEST_UNDECLARED_OUTPUTS_ZIP" ]] && cd "$TEST_UNDECLARED_OUTPUTS_DIR";
     # If * found nothing, echo printed the literal *.
     # Otherwise echo printed the top-level files and directories.
     # Pass files to zip with *, so paths with spaces aren't broken up.
-    zip -qr "$TEST_UNDECLARED_OUTPUTS_ZIP" -- * 2>/dev/null || \
+    # Remove original files after zipping them.
+    zip -qrm "$TEST_UNDECLARED_OUTPUTS_ZIP" -- * 2>/dev/null || \
         echo >&2 "Could not create \"$TEST_UNDECLARED_OUTPUTS_ZIP\": zip not found or failed"
   fi
 fi

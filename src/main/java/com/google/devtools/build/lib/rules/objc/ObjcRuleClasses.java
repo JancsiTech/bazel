@@ -41,7 +41,6 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction.SafeImplicitOutputsFunction;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
-import com.google.devtools.build.lib.packages.RuleClass.ToolchainTransitionMode;
 import com.google.devtools.build.lib.packages.StarlarkProviderIdentifier;
 import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
@@ -143,7 +142,7 @@ public class ObjcRuleClasses {
             AppleConfiguration.appleTargetPlatformEnv(
                 targetPlatform, xcodeConfigInfo.getSdkVersionForPlatform(targetPlatform)))
         .putAll(AppleConfiguration.getXcodeVersionEnv(xcodeConfigInfo.getXcodeVersion()))
-        .build();
+        .buildOrThrow();
   }
 
   /** Creates a new spawn action builder that requires a darwin architecture to run. */
@@ -218,8 +217,8 @@ public class ObjcRuleClasses {
           "Foundation" are always included when building for the iOS, tvOS and watchOS platforms.
           For macOS, only "Foundation" is always included.
 
-          <p> When linking a top level binary (e.g. apple_binary), all SDK frameworks listed in that
-          binary's transitive dependency graph are linked.
+          <p> When linking a top level Apple binary, all SDK frameworks listed in that binary's
+          transitive dependency graph are linked.
           <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
           .add(attr("sdk_frameworks", STRING_LIST))
           /* <!-- #BLAZE_RULE($objc_sdk_frameworks_depender_rule).ATTRIBUTE(weak_sdk_frameworks) -->
@@ -312,8 +311,7 @@ public class ObjcRuleClasses {
           .add(
               attr(CcToolchain.CC_TOOLCHAIN_TYPE_ATTRIBUTE_NAME, NODEP_LABEL)
                   .value(CppRuleClasses.ccToolchainTypeAttribute(env)))
-          .addRequiredToolchains(ImmutableList.of(CppRuleClasses.ccToolchainTypeAttribute(env)))
-          .useToolchainTransition(ToolchainTransitionMode.ENABLED)
+          .addToolchainTypes(CppRuleClasses.ccToolchainTypeRequirement(env))
           .build();
     }
 
@@ -658,12 +656,15 @@ public class ObjcRuleClasses {
                   .direct_compile_time_input()
                   .allowedFileTypes(FileTypeSet.ANY_FILE))
           .add(
+              // This attribute definition must be kept in sync with
+              // third_party/bazel_rules/rules_apple/apple/internal/rule_factory.bzl
               attr("$j2objc_dead_code_pruner", LABEL)
-                  .allowedFileTypes(FileType.of(".py"))
                   .cfg(ExecutionTransitionFactory.create())
                   .exec()
-                  .singleArtifact()
-                  .value(env.getToolsLabel("//tools/objc:j2objc_dead_code_pruner")))
+                  // Allow arbitrary executable files; this gives more flexibility for the
+                  // implementation of the underlying tool.
+                  .legacyAllowAnyFileType()
+                  .value(env.getToolsLabel("//tools/objc:j2objc_dead_code_pruner_binary")))
           .add(attr("$dummy_lib", LABEL).value(env.getToolsLabel("//tools/objc:dummy_lib")))
           .build();
     }

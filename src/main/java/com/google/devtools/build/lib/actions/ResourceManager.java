@@ -24,11 +24,14 @@ import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.unix.ProcMeminfoParser;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.util.Pair;
+import com.google.devtools.build.lib.worker.Worker;
+import com.google.devtools.build.lib.worker.WorkerPool;
 import java.io.IOException;
 import java.util.Deque;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.concurrent.CountDownLatch;
+import javax.annotation.Nullable;
 
 /**
  * Used to keep track of resources consumed by the Blaze action execution threads and throttle them
@@ -66,32 +69,46 @@ public class ResourceManager {
    * ResourcePriority)} that must be closed in order to free the resources again.
    */
   public static class ResourceHandle implements AutoCloseable {
-    final ResourceManager rm;
-    final ActionExecutionMetadata actionMetadata;
-    final ResourceSet resourceSet;
+    private final ResourceManager rm;
+    private final ActionExecutionMetadata actionMetadata;
+    private final ResourceSet resourceSet;
+    private final Worker worker;
 
-    public ResourceHandle(ResourceManager rm, ActionExecutionMetadata actionMetadata,
-        ResourceSet resources) {
+    private ResourceHandle(
+        ResourceManager rm,
+        ActionExecutionMetadata actionMetadata,
+        ResourceSet resources,
+        Worker worker) {
       this.rm = rm;
       this.actionMetadata = actionMetadata;
       this.resourceSet = resources;
+      this.worker = worker;
     }
 
-    /**
-     * Closing the ResourceHandle releases the resources associated with it.
-     */
+    private ResourceHandle(
+        ResourceManager rm, ActionExecutionMetadata actionMetadata, ResourceSet resources) {
+      this(rm, actionMetadata, resources, /* worker= */ null);
+    }
+
+    @Nullable
+    public Worker getWorker() {
+      return worker;
+    }
+
+    /** Closing the ResourceHandle releases the resources associated with it. */
     @Override
     public void close() {
       rm.releaseResources(actionMetadata, resourceSet);
     }
   }
 
-  private final ThreadLocal<Boolean> threadLocked = new ThreadLocal<Boolean>() {
-    @Override
-    protected Boolean initialValue() {
-      return false;
-    }
-  };
+  private final ThreadLocal<Boolean> threadLocked =
+      new ThreadLocal<Boolean>() {
+        @Override
+        protected Boolean initialValue() {
+          return false;
+        }
+      };
 
   /**
    * Defines the possible priorities of resources. The earlier elements in this enum will get first
@@ -108,9 +125,7 @@ public class ResourceManager {
     static ResourceManager instance = new ResourceManager();
   }
 
-  /**
-   * Returns singleton instance of the resource manager.
-   */
+  /** Returns singleton instance of the resource manager. */
   public static ResourceManager instance() {
     return Singleton.instance;
   }
@@ -138,6 +153,8 @@ public class ResourceManager {
   private final Deque<Pair<ResourceSet, CountDownLatch>> dynamicStandaloneRequests =
       new LinkedList<>();
 
+  private WorkerPool workerPool;
+
   // The total amount of resources on the local host. Must be set by
   // an explicit call to setAvailableResources(), often using
   // LocalHostCapacity.getLocalHostCapacity() as an argument.
@@ -163,16 +180,17 @@ public class ResourceManager {
   /** If set, local-only actions are given priority over dynamically run actions. */
   private boolean prioritizeLocalActions;
 
-  private ResourceManager() {
-  }
+  private ResourceManager() {}
 
-  @VisibleForTesting public static ResourceManager instanceForTestingOnly() {
+  @VisibleForTesting
+  public static ResourceManager instanceForTestingOnly() {
     return new ResourceManager();
   }
 
   /**
    * Resets resource manager state and releases all thread locks.
-   * Note - it does not reset available resources. Use separate call to setAvailableResources().
+   *
+   * <p>Note - it does not reset available resources. Use separate call to setAvailableResources().
    */
   public synchronized void resetResourceUsage() {
     usedCpu = 0;
@@ -193,8 +211,9 @@ public class ResourceManager {
   }
 
   /**
-   * Sets available resources using given resource set. Must be called
-   * at least once before using resource manager.
+   * Sets available resources using given resource set.
+   *
+   * <p>Must be called at least once before using resource manager.
    */
   public synchronized void setAvailableResources(ResourceSet resources) {
     Preconditions.checkNotNull(resources);
@@ -217,6 +236,11 @@ public class ResourceManager {
     localMemoryEstimate = value;
   }
 
+  /** Sets worker pool for taking the workers. Must be called before requesting the workers. */
+  public void setWorkerPool(WorkerPool workerPool) {
+    this.workerPool = workerPool;
+  }
+
   /** Sets whether to prioritize local-only actions in resource allocation. */
   public void setPrioritizeLocalActions(boolean prioritizeLocalActions) {
     this.prioritizeLocalActions = prioritizeLocalActions;
@@ -228,11 +252,16 @@ public class ResourceManager {
    */
   public ResourceHandle acquireResources(
       ActionExecutionMetadata owner, ResourceSet resources, ResourcePriority priority)
-      throws InterruptedException {
+      throws InterruptedException, IOException {
     Preconditions.checkNotNull(
         resources, "acquireResources called with resources == NULL during %s", owner);
     Preconditions.checkState(
         !threadHasResources(), "acquireResources with existing resource lock during %s", owner);
+
+    Worker worker = null;
+    if (resources.getWorkerKey() != null) {
+      worker = this.workerPool.borrowObject(resources.getWorkerKey());
+    }
 
     AutoProfiler p =
         profiled("Acquiring resources for: " + owner.describe(), ProfilerTask.ACTION_LOCK);
@@ -264,7 +293,7 @@ public class ResourceManager {
       p.complete();
     }
 
-    return new ResourceHandle(this, owner, resources);
+    return new ResourceHandle(this, owner, resources, worker);
   }
 
   /**
@@ -450,7 +479,7 @@ public class ResourceManager {
     if (localMemoryEstimate && OS.getCurrent() == OS.LINUX) {
       try {
         ProcMeminfoParser memInfo = new ProcMeminfoParser();
-        double totalFreeRam = memInfo.getFreeRamKb() / 1024;
+        double totalFreeRam = memInfo.getFreeRamKb() / 1024.0;
         double reserveMemory = staticResources.getMemoryMb();
         remainingRam = totalFreeRam - reserveMemory;
       } catch (IOException e) {

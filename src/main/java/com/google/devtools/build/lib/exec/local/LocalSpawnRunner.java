@@ -59,6 +59,7 @@ import com.google.devtools.build.lib.util.NetUtil;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.vfs.XattrProvider;
 import com.google.errorprone.annotations.FormatMethod;
 import com.google.errorprone.annotations.FormatString;
 import java.io.File;
@@ -66,6 +67,7 @@ import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
@@ -91,6 +93,7 @@ public class LocalSpawnRunner implements SpawnRunner {
   private final String hostName;
 
   private final LocalExecutionOptions localExecutionOptions;
+  private final XattrProvider xattrProvider;
 
   @Nullable private final ProcessWrapper processWrapper;
 
@@ -106,10 +109,12 @@ public class LocalSpawnRunner implements SpawnRunner {
       LocalEnvProvider localEnvProvider,
       BinTools binTools,
       ProcessWrapper processWrapper,
+      XattrProvider xattrProvider,
       RunfilesTreeUpdater runfilesTreeUpdater) {
     this.execRoot = execRoot;
     this.processWrapper = processWrapper;
     this.localExecutionOptions = Preconditions.checkNotNull(localExecutionOptions);
+    this.xattrProvider = xattrProvider;
     this.hostName = NetUtil.getCachedShortHostName();
     this.resourceManager = resourceManager;
     this.localEnvProvider = localEnvProvider;
@@ -134,7 +139,8 @@ public class LocalSpawnRunner implements SpawnRunner {
         spawn.getRunfilesSupplier(),
         binTools,
         spawn.getEnvironment(),
-        context.getFileOutErr());
+        context.getFileOutErr(),
+        xattrProvider);
     spawnMetrics.addSetupTime(setupTimeStopwatch.elapsed());
 
     try (SilentCloseable c =
@@ -348,7 +354,7 @@ public class LocalSpawnRunner implements SpawnRunner {
       if (Spawns.shouldPrefetchInputsForLocalExecution(spawn)) {
         stepLog(INFO, "prefetching inputs for local execution");
         setState(State.PREFETCHING_LOCAL_INPUTS);
-        context.prefetchInputs();
+        context.prefetchInputsAndWait();
       }
 
       spawnMetrics.setInputFiles(spawn.getInputFiles().memoizedFlattenAndGetSize());
@@ -417,6 +423,7 @@ public class LocalSpawnRunner implements SpawnRunner {
         subprocessBuilder.setArgv(args);
         spawnMetrics.addSetupTime(setupTimeStopwatch.elapsed());
 
+        spawnResultBuilder.setStartTime(Instant.now());
         Stopwatch executionStopwatch = Stopwatch.createStarted();
         TerminationStatus terminationStatus;
         try (SilentCloseable c =

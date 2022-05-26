@@ -74,7 +74,7 @@ public final class UnixGlob {
       Path base,
       Collection<String> patterns,
       UnixGlobPathDiscriminator pathDiscriminator,
-      FilesystemCalls syscalls,
+      SyscallCache syscalls,
       Executor executor)
       throws IOException, InterruptedException, BadPattern {
     GlobVisitor visitor = new GlobVisitor(executor);
@@ -85,7 +85,7 @@ public final class UnixGlob {
       Path base,
       Collection<String> patterns,
       UnixGlobPathDiscriminator pathDiscriminator,
-      FilesystemCalls syscalls,
+      SyscallCache syscalls,
       Executor executor)
       throws IOException, BadPattern {
     GlobVisitor visitor = new GlobVisitor(executor);
@@ -96,7 +96,7 @@ public final class UnixGlob {
       Path base,
       Collection<String> patterns,
       UnixGlobPathDiscriminator pathDiscriminator,
-      FilesystemCalls syscalls,
+      SyscallCache syscalls,
       Executor executor)
       throws IOException, InterruptedException, BadPattern {
     GlobVisitor visitor = new GlobVisitor(executor);
@@ -108,7 +108,7 @@ public final class UnixGlob {
       Path base,
       Collection<String> patterns,
       UnixGlobPathDiscriminator pathDiscriminator,
-      FilesystemCalls syscalls,
+      SyscallCache syscalls,
       Executor executor)
       throws BadPattern {
     Preconditions.checkNotNull(executor, "%s %s", base, patterns);
@@ -279,78 +279,21 @@ public final class UnixGlob {
   }
 
   /**
-   * Filesystem calls required for glob().
-   */
-  public interface FilesystemCalls {
-    /** Get directory entries and their types. Does not follow symlinks. */
-    Collection<Dirent> readdir(Path path) throws IOException;
-
-    /** Return the stat() for the given path, or null. */
-    FileStatus statIfFound(Path path, Symlinks symlinks) throws IOException;
-
-    /**
-     * Return the type of a specific file. This may be answered using stat() or readdir(). Returns
-     * null if the path does not exist.
-     */
-    Dirent.Type getType(Path path, Symlinks symlinks) throws IOException;
-  }
-
-  public static final FilesystemCalls DEFAULT_SYSCALLS =
-      new FilesystemCalls() {
-        @Override
-        public Collection<Dirent> readdir(Path path) throws IOException {
-          return path.readdir(Symlinks.NOFOLLOW);
-        }
-
-        @Override
-        public FileStatus statIfFound(Path path, Symlinks symlinks) throws IOException {
-          return path.statIfFound(symlinks);
-        }
-
-        @Override
-        public Dirent.Type getType(Path path, Symlinks symlinks) throws IOException {
-          return statusToDirentType(statIfFound(path, symlinks));
-        }
-      };
-
-  public static Dirent.Type statusToDirentType(FileStatus status) {
-    if (status == null) {
-      return null;
-    } else if (status.isFile()) {
-      return Dirent.Type.FILE;
-    } else if (status.isDirectory()) {
-      return Dirent.Type.DIRECTORY;
-    } else if (status.isSymbolicLink()) {
-      return Dirent.Type.SYMLINK;
-    }
-    return Dirent.Type.UNKNOWN;
-  }
-
-  public static final AtomicReference<FilesystemCalls> DEFAULT_SYSCALLS_REF =
-      new AtomicReference<>(DEFAULT_SYSCALLS);
-
-  public static Builder forPath(Path path) {
-    return new Builder(path);
-  }
-
-  /**
    * Builder class for UnixGlob.
    *
    *
    */
   public static class Builder {
-    private Path base;
-    private List<String> patterns;
+    private final Path base;
+    private final List<String> patterns;
+    private final SyscallCache syscallCache;
     private UnixGlobPathDiscriminator pathDiscriminator = DEFAULT_DISCRIMINATOR;
     private Executor executor;
-    private AtomicReference<? extends FilesystemCalls> syscalls =
-        new AtomicReference<>(DEFAULT_SYSCALLS);
 
-    /**
-     * Creates a glob builder with the given base path.
-     */
-    public Builder(Path base) {
+    /** Creates a glob builder with the given base path. */
+    public Builder(Path base, SyscallCache syscallCache) {
       this.base = base;
+      this.syscallCache = syscallCache;
       this.patterns = Lists.newArrayList();
     }
 
@@ -385,16 +328,6 @@ public final class UnixGlob {
     }
 
     /**
-     * Sets the FilesystemCalls interface to use on this glob().
-     */
-    public Builder setFilesystemCalls(AtomicReference<? extends FilesystemCalls> syscalls) {
-      this.syscalls = (syscalls == null)
-          ? new AtomicReference<FilesystemCalls>(DEFAULT_SYSCALLS)
-          : syscalls;
-      return this;
-    }
-
-    /**
      * Sets the executor to use for parallel glob evaluation. If unset, evaluation is done
      * in-thread.
      */
@@ -422,8 +355,7 @@ public final class UnixGlob {
 
     /** Executes the glob. */
     public List<Path> glob() throws IOException, BadPattern {
-      return globInternalUninterruptible(
-          base, patterns, pathDiscriminator, syscalls.get(), executor);
+      return globInternalUninterruptible(base, patterns, pathDiscriminator, syscallCache, executor);
     }
 
     /**
@@ -432,14 +364,14 @@ public final class UnixGlob {
      * @throws InterruptedException if the thread is interrupted.
      */
     public List<Path> globInterruptible() throws IOException, InterruptedException, BadPattern {
-      return globInternal(base, patterns, pathDiscriminator, syscalls.get(), executor);
+      return globInternal(base, patterns, pathDiscriminator, syscallCache, executor);
     }
 
     @VisibleForTesting
     public long globInterruptibleAndReturnNumGlobTasksForTesting()
         throws IOException, InterruptedException, BadPattern {
       return globInternalAndReturnNumGlobTasksForTesting(
-          base, patterns, pathDiscriminator, syscalls.get(), executor);
+          base, patterns, pathDiscriminator, syscallCache, executor);
     }
 
     /**
@@ -447,7 +379,7 @@ public final class UnixGlob {
      * non-null argument.
      */
     public Future<List<Path>> globAsync() throws BadPattern {
-      return globAsyncInternal(base, patterns, pathDiscriminator, syscalls.get(), executor);
+      return globAsyncInternal(base, patterns, pathDiscriminator, syscallCache, executor);
     }
   }
 
@@ -531,7 +463,7 @@ public final class UnixGlob {
         Path base,
         Collection<String> patterns,
         UnixGlobPathDiscriminator pathDiscriminator,
-        FilesystemCalls syscalls)
+        SyscallCache syscalls)
         throws IOException, InterruptedException, BadPattern {
       try {
         return globAsync(base, patterns, pathDiscriminator, syscalls).get();
@@ -546,7 +478,7 @@ public final class UnixGlob {
         Path base,
         Collection<String> patterns,
         UnixGlobPathDiscriminator pathDiscriminator,
-        FilesystemCalls syscalls)
+        SyscallCache syscalls)
         throws IOException, BadPattern {
       try {
         return Uninterruptibles.getUninterruptibly(
@@ -571,7 +503,7 @@ public final class UnixGlob {
         Path base,
         Collection<String> patterns,
         UnixGlobPathDiscriminator pathDiscriminator,
-        FilesystemCalls syscalls)
+        SyscallCache syscalls)
         throws BadPattern {
       FileStatus baseStat;
       try {
@@ -710,12 +642,12 @@ public final class UnixGlob {
     private class GlobTaskContext {
       private final String[] patternParts;
       private final UnixGlobPathDiscriminator pathDiscriminator;
-      private final FilesystemCalls syscalls;
+      private final SyscallCache syscalls;
 
       GlobTaskContext(
           String[] patternParts,
           UnixGlobPathDiscriminator pathDiscriminator,
-          FilesystemCalls syscalls) {
+          SyscallCache syscalls) {
         this.patternParts = patternParts;
         this.pathDiscriminator = pathDiscriminator;
         this.syscalls = syscalls;
@@ -766,7 +698,7 @@ public final class UnixGlob {
       private RecursiveGlobTaskContext(
           String[] patternParts,
           UnixGlobPathDiscriminator pathDiscriminator,
-          FilesystemCalls syscalls) {
+          SyscallCache syscalls) {
         super(patternParts, pathDiscriminator, syscalls);
       }
 

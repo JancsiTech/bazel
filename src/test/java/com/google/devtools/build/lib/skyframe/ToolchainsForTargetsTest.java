@@ -175,7 +175,7 @@ public final class ToolchainsForTargetsTest extends AnalysisTestCase {
           .put(
               ComputeUnloadedToolchainContextsFunction.SKYFUNCTION_NAME,
               new ComputeUnloadedToolchainContextsFunction(stateProvider))
-          .build();
+          .buildOrThrow();
     }
   }
 
@@ -362,7 +362,7 @@ public final class ToolchainsForTargetsTest extends AnalysisTestCase {
         getToolchainCollection("//a");
     assertThat(toolchainCollection).isNotNull();
     assertThat(toolchainCollection).hasDefaultExecGroup();
-    assertThat(toolchainCollection).defaultToolchainContext().toolchainTypeLabels().isEmpty();
+    assertThat(toolchainCollection).defaultToolchainContext().toolchainTypes().isEmpty();
     assertThat(toolchainCollection).defaultToolchainContext().resolvedToolchainLabels().isEmpty();
 
     assertThat(toolchainCollection).hasExecGroup("temp");

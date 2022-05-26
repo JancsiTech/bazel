@@ -50,8 +50,10 @@ import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.analysis.config.CompilationMode;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
+import com.google.devtools.build.lib.analysis.test.InstrumentedFilesInfo;
 import com.google.devtools.build.lib.analysis.util.AnalysisMock;
 import com.google.devtools.build.lib.analysis.util.ScratchAttributeWriter;
+import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.packages.NoSuchTargetException;
@@ -2060,7 +2062,7 @@ public class ObjcLibraryTest extends ObjcRuleTestCase {
     scratchConfiguredTarget("foo", "x", "objc_library(name = 'x', srcs = ['a.m'])");
 
     CppLinkAction archiveAction = (CppLinkAction) archiveAction("//foo:x");
-    assertThat(archiveAction.getMnemonic()).isEqualTo("CppLink");
+    assertThat(archiveAction.getMnemonic()).isEqualTo("CppArchive");
   }
 
   protected List<String> linkstampExecPaths(NestedSet<CcLinkingContext.Linkstamp> linkstamps) {
@@ -2330,11 +2332,11 @@ public class ObjcLibraryTest extends ObjcRuleTestCase {
     CcToolchainProvider toolchainProvider = target.get(CcToolchainProvider.PROVIDER);
 
     RuleConfiguredTarget libTarget = (RuleConfiguredTarget) getConfiguredTarget("//a:l");
-    ActionAnalysisMetadata linkAction =
+    ActionAnalysisMetadata archiveAction =
         libTarget.getActions().stream()
-            .filter((a) -> a.getMnemonic().equals("CppLink"))
+            .filter((a) -> a.getMnemonic().equals("CppArchive"))
             .collect(onlyElement());
-    assertThat(linkAction.getInputs().toList())
+    assertThat(archiveAction.getInputs().toList())
         .containsAtLeastElementsIn(toolchainProvider.getArFiles().toList());
 
     ActionAnalysisMetadata objcCompileAction =
@@ -2407,5 +2409,132 @@ public class ObjcLibraryTest extends ObjcRuleTestCase {
     CppCompileAction compileA = (CppCompileAction) compileAction("//bin:lib", "lib1.o");
     assertThat(compileA.compileCommandLine.getCopts())
         .containsAtLeast("bin/lib1.m", "bin/lib2.m", "bin/data.data", "bin/header.h");
+  }
+
+  @Test
+  public void testEnableCoveragePropagatesSupportFiles() throws Exception {
+    scratch.file(
+        "a/BUILD",
+        "cc_toolchain_alias(name = 'toolchain')",
+        "objc_library(",
+        "    name = 'lib',",
+        ")");
+    useConfiguration("--collect_code_coverage", "--instrumentation_filter=//a[:/]");
+
+    CcToolchainProvider ccToolchainProvider =
+        getConfiguredTarget("//a:toolchain").get(CcToolchainProvider.PROVIDER);
+    InstrumentedFilesInfo instrumentedFilesInfo =
+        getConfiguredTarget("//a:lib").get(InstrumentedFilesInfo.STARLARK_CONSTRUCTOR);
+
+    assertThat(instrumentedFilesInfo.getCoverageSupportFiles().toList()).isNotEmpty();
+    assertThat(instrumentedFilesInfo.getCoverageSupportFiles().toList())
+        .containsExactlyElementsIn(ccToolchainProvider.getCoverageFiles().toList());
+  }
+
+  @Test
+  public void testDisableCoverageDoesNotPropagateSupportFiles() throws Exception {
+    scratch.file(
+        "a/BUILD",
+        "cc_toolchain_alias(name = 'toolchain')",
+        "objc_library(",
+        "    name = 'lib',",
+        ")");
+
+    InstrumentedFilesInfo instrumentedFilesInfo =
+        getConfiguredTarget("//a:lib").get(InstrumentedFilesInfo.STARLARK_CONSTRUCTOR);
+
+    assertThat(instrumentedFilesInfo.getCoverageSupportFiles().toList()).isEmpty();
+  }
+
+  private ImmutableList<String> getCcInfoUserLinkFlagsFromTarget(String target)
+      throws LabelSyntaxException {
+    return getConfiguredTarget(target)
+        .get(CcInfo.PROVIDER)
+        .getCcLinkingContext()
+        .getUserLinkFlags()
+        .toList()
+        .stream()
+        .map(CcLinkingContext.LinkOptions::get)
+        .flatMap(List::stream)
+        .collect(toImmutableList());
+  }
+
+  @Test
+  public void testSdkUserLinkFlagsFromSdkFieldsAndLinkoptsArePropagatedOnCcInfo() throws Exception {
+    scratch.file(
+        "x/BUILD",
+        "objc_library(",
+        "    name = 'foo',",
+        "    linkopts = [",
+        "        '-lxml2',",
+        "        '-framework AVFoundation',",
+        "    ],",
+        "    sdk_dylibs = ['libz'],",
+        "    sdk_frameworks = ['CoreData'],",
+        "    deps = [':bar', ':car'],",
+        ")",
+        "objc_library(",
+        "    name = 'bar',",
+        "    linkopts = [",
+        "        '-lsqlite3',",
+        "    ],",
+        "    sdk_frameworks = ['Foundation'],",
+        ")",
+        "objc_library(",
+        "    name = 'car',",
+        "    linkopts = [",
+        "        '-framework UIKit',",
+        "    ],",
+        "    sdk_dylibs = ['libc++'],",
+        ")");
+
+    ImmutableList<String> userLinkFlags = getCcInfoUserLinkFlagsFromTarget("//x:foo");
+    assertThat(userLinkFlags).isNotEmpty();
+    assertThat(userLinkFlags).containsAtLeast("-framework", "AVFoundation").inOrder();
+    assertThat(userLinkFlags).containsAtLeast("-framework", "CoreData").inOrder();
+    assertThat(userLinkFlags).containsAtLeast("-framework", "Foundation").inOrder();
+    assertThat(userLinkFlags).containsAtLeast("-framework", "UIKit").inOrder();
+    assertThat(userLinkFlags).containsAtLeast("-lz", "-lc++", "-lxml2", "-lsqlite3");
+  }
+
+  @Test
+  public void testNoDuplicateSdkUserLinkFlagsFromMultipleDepsOnCcInfo() throws Exception {
+    scratch.file(
+        "x/BUILD",
+        "objc_library(",
+        "    name = 'foo',",
+        "    linkopts = [",
+        "        '-lsqlite3',",
+        "        '-framework UIKit',",
+        "    ],",
+        "    sdk_dylibs = ['libc++'],",
+        "    sdk_frameworks = ['Foundation'],",
+        "    deps = [':bar', ':car'],",
+        ")",
+        "objc_library(",
+        "    name = 'bar',",
+        "    linkopts = [",
+        "        '-lsqlite3',",
+        "        '-framework CoreData',",
+        "    ],",
+        "    sdk_frameworks = ['Foundation'],",
+        ")",
+        "objc_library(",
+        "    name = 'car',",
+        "    linkopts = [",
+        "        '-framework UIKit',",
+        "        '-framework CoreData',",
+        "    ],",
+        "    sdk_dylibs = ['libc++'],",
+        ")");
+    ImmutableList<String> userLinkFlags = getCcInfoUserLinkFlagsFromTarget("//x:foo");
+    assertThat(userLinkFlags).isNotEmpty();
+    assertThat(userLinkFlags).containsAtLeast("-framework", "CoreData").inOrder();
+    assertThat(userLinkFlags).containsAtLeast("-framework", "Foundation").inOrder();
+    assertThat(userLinkFlags).containsAtLeast("-framework", "UIKit").inOrder();
+    assertThat(userLinkFlags).containsAtLeast("-lc++", "-lsqlite3");
+    ImmutableList<String> userLinkFlagsWithoutFrameworkFlags =
+        userLinkFlags.stream().filter(s -> !s.equals("-framework")).collect(toImmutableList());
+    assertThat(userLinkFlagsWithoutFrameworkFlags).containsNoDuplicates();
   }
 }

@@ -25,7 +25,6 @@ public class MockPlatformSupport {
   public static void setup(MockToolsConfig mockToolsConfig) throws IOException {
     setup(
         mockToolsConfig,
-        TestConstants.PLATFORM_PACKAGE_ROOT,
         TestConstants.PLATFORMS_PATH,
         TestConstants.CONSTRAINTS_PACKAGE_ROOT,
         TestConstants.CONSTRAINTS_PATH);
@@ -34,7 +33,6 @@ public class MockPlatformSupport {
   /** Adds mocks for basic host and target platform. */
   public static void setup(
       MockToolsConfig mockToolsConfig,
-      String platformPackageRoot,
       String platformsPath,
       String constraintsPackageRoot,
       String constraintsPath)
@@ -65,6 +63,18 @@ public class MockPlatformSupport {
         "    constraint_setting = ':cpu',",
         ")",
         "constraint_value(",
+        "    name = 'arm64',",
+        "    constraint_setting = ':cpu',",
+        ")",
+        "constraint_value(",
+        "    name = 'armv7',",
+        "    constraint_setting = ':cpu',",
+        ")",
+        "constraint_value(",
+        "    name = 'armv7k',",
+        "    constraint_setting = ':cpu',",
+        ")",
+        "constraint_value(",
         "    name = 'aarch64',",
         "    constraint_setting = ':cpu',",
         ")",
@@ -82,7 +92,19 @@ public class MockPlatformSupport {
         "    constraint_setting = ':os',",
         ")",
         "constraint_value(",
+        "    name = 'macos',",
+        "    constraint_setting = ':os',",
+        ")",
+        "constraint_value(",
         "    name = 'ios',",
+        "    constraint_setting = ':os',",
+        ")",
+        "constraint_value(",
+        "    name = 'tvos',",
+        "    constraint_setting = ':os',",
+        ")",
+        "constraint_value(",
+        "    name = 'watchos',",
         "    constraint_setting = ':os',",
         ")",
         "constraint_value(",
@@ -115,7 +137,6 @@ public class MockPlatformSupport {
         // default value for simplicity.
         "        '" + constraintsPackageRoot + "cpu:x86_64',",
         "        '" + constraintsPackageRoot + "os:linux',",
-        "        '" + platformPackageRoot + "/java/constraints:jdk11',",
         "    ],",
         ")",
         "platform(",
@@ -123,25 +144,7 @@ public class MockPlatformSupport {
         "    constraint_values = [",
         "        '" + constraintsPackageRoot + "cpu:x86_64',",
         "        '" + constraintsPackageRoot + "os:linux',",
-        "        '" + platformPackageRoot + "/java/constraints:jdk11',",
         "    ],",
-        ")");
-    mockToolsConfig.create(
-        platformsPath + "/java/constraints/BUILD",
-        "package(default_visibility = ['//visibility:public'])",
-        "constraint_setting(name = 'runtime')",
-        "constraint_value(",
-        "    name = 'jdk8',",
-        "    constraint_setting = ':runtime',",
-        ")",
-        "constraint_value(",
-        "    name = 'jdk11',",
-        "    constraint_setting = ':runtime',",
-        ")",
-        "constraint_setting(name = 'language')",
-        "constraint_value(",
-        "    name = 'java8',",
-        "    constraint_setting = ':language',",
         ")");
   }
 

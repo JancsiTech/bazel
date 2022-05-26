@@ -18,7 +18,7 @@ import static com.google.devtools.build.lib.actions.ActionAnalysisMetadata.merge
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Ascii;
+import com.google.common.base.CharMatcher;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Supplier;
 import com.google.common.base.Suppliers;
@@ -63,6 +63,7 @@ import com.google.devtools.build.lib.actions.extra.CppCompileInfo;
 import com.google.devtools.build.lib.actions.extra.EnvironmentVariable;
 import com.google.devtools.build.lib.actions.extra.ExtraActionInfo;
 import com.google.devtools.build.lib.analysis.starlark.Args;
+import com.google.devtools.build.lib.bugreport.BugReport;
 import com.google.devtools.build.lib.cmdline.LabelConstants;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
@@ -97,6 +98,7 @@ import com.google.devtools.build.lib.vfs.Symlinks;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
+import com.google.devtools.build.skyframe.SkyframeIterableResult;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -145,6 +147,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
   private final boolean usePic;
   private final boolean useHeaderModules;
   final boolean needsIncludeValidation;
+  private final boolean hasCoverageArtifact;
 
   private final CcCompilationContext ccCompilationContext;
   private final ImmutableList<Artifact> builtinIncludeFiles;
@@ -308,6 +311,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
               .getParentDirectory()
               .getChild(outputFile.getFilename() + ".params");
     }
+    this.hasCoverageArtifact = gcnoFile != null;
   }
 
   private static ImmutableSet<Artifact> collectOutputs(
@@ -318,15 +322,16 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
       @Nullable Artifact ltoIndexingFile,
       ImmutableList<Artifact> additionalOutputs) {
     ImmutableSet.Builder<Artifact> outputs = ImmutableSet.builder();
+    // gcnoFile comes first because easy access to it is occasionally useful.
+    if (gcnoFile != null) {
+      outputs.add(gcnoFile);
+    }
     outputs.addAll(additionalOutputs);
     if (outputFile != null) {
       outputs.add(outputFile);
     }
     if (dotdFile != null) {
       outputs.add(dotdFile);
-    }
-    if (gcnoFile != null) {
-      outputs.add(gcnoFile);
     }
     if (dwoFile != null) {
       outputs.add(dwoFile);
@@ -675,11 +680,6 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
     return result.build();
   }
 
-  private static boolean startsWithIgnoreCase(String s, String prefix) {
-    return s.length() >= prefix.length()
-        && Ascii.equalsIgnoreCase(s.substring(0, prefix.length()), prefix);
-  }
-
   @Override
   public List<PathFragment> getIncludeDirs() {
     ImmutableList.Builder<PathFragment> result = ImmutableList.builder();
@@ -691,7 +691,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
         if (includeDir.isEmpty()) {
           continue;
         }
-        if (startsWithIgnoreCase(includeDir, "msvc")) {
+        if (matchesCaseInsensitiveMsvc(includeDir)) {
           // This is actually a "-imsvc", a system include dir.
           continue;
         }
@@ -724,7 +724,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
       String systemIncludeFlag = null;
       if (opt.startsWith("-isystem")) {
         systemIncludeFlag = "-isystem";
-      } else if (startsWithIgnoreCase(opt, "-imsvc") || startsWithIgnoreCase(opt, "/imsvc")) {
+      } else if (matchesIncludeCaseInsensitiveMsvc(opt)) {
         systemIncludeFlag = opt.substring(0, 6);
       }
       if (systemIncludeFlag == null) {
@@ -742,6 +742,35 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
       }
     }
     return result.build();
+  }
+
+  private static final ImmutableList<CharMatcher> MSVC_CHARS =
+      ImmutableList.of(
+          CharMatcher.anyOf("mM"),
+          CharMatcher.anyOf("sS"),
+          CharMatcher.anyOf("vV"),
+          CharMatcher.anyOf("cC"));
+  private static final ImmutableList<CharMatcher> INCLUDE_PREFIX_CHARS =
+      ImmutableList.of(CharMatcher.anyOf("-/"), CharMatcher.anyOf("iI"));
+
+  private static boolean substrMatchesChars(
+      String s, int startPos, ImmutableList<CharMatcher> substr) {
+    for (int i = 0; i < substr.size(); i++) {
+      if (!substr.get(i).matches(s.charAt(startPos + i))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static boolean matchesCaseInsensitiveMsvc(String s) {
+    return s.length() >= 4 && substrMatchesChars(s, 0, MSVC_CHARS);
+  }
+
+  private static boolean matchesIncludeCaseInsensitiveMsvc(String s) {
+    return s.length() >= 6
+        && substrMatchesChars(s, 0, INCLUDE_PREFIX_CHARS)
+        && substrMatchesChars(s, 2, MSVC_CHARS);
   }
 
   private static ImmutableList<String> getCmdlineIncludes(List<String> args) {
@@ -831,6 +860,15 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
   @Override
   public List<String> getArguments() throws CommandLineExpansionException {
     return compileCommandLine.getArguments(paramFilePath, getOverwrittenVariables());
+  }
+
+  @Override
+  public Sequence<String> getStarlarkArgv() throws EvalException, InterruptedException {
+    try {
+      return StarlarkList.immutableCopyOf(getArguments());
+    } catch (CommandLineExpansionException ex) {
+      throw new EvalException(ex);
+    }
   }
 
   @Override
@@ -1117,7 +1155,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
             // TODO(b/187366935): Consider globbing everything eagerly instead.
             fileStatus =
                 actionExecutionContext
-                    .getSyscalls()
+                    .getSyscallCache()
                     .statIfFound(dirOrPackage.getRelative(BUILD_PATH_FRAGMENT), Symlinks.FOLLOW);
           } catch (IOException e) {
             // Previously, we used Path.exists() to check whether the BUILD file exists. This did
@@ -1144,7 +1182,8 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
   final void updateActionInputs(NestedSet<Artifact> discoveredInputs) {
     Preconditions.checkState(
         discoversInputs(), "Can't call if not discovering inputs: %s %s", discoveredInputs, this);
-    try (SilentCloseable c = Profiler.instance().profile(ProfilerTask.ACTION_UPDATE, describe())) {
+    try (SilentCloseable c =
+        Profiler.instance().profile(ProfilerTask.ACTION_UPDATE, this::describe)) {
       NestedSetBuilder<Artifact> inputsBuilder =
           NestedSetBuilder.<Artifact>stableOrder()
               .addTransitive(mandatoryInputs)
@@ -1509,14 +1548,22 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
           this,
           ImmutableList.copyOf(getArguments()),
           getEffectiveEnvironment(clientEnv),
-          executionInfo.build(),
+          executionInfo.buildOrThrow(),
+          /*runfilesSupplier=*/ null,
+          /*filesetMappings=*/ ImmutableMap.of(),
           inputs,
+          /*tools=*/ NestedSetBuilder.emptySet(Order.STABLE_ORDER),
           getOutputs(),
-          estimateResourceConsumptionLocal(
-              enabledCppCompileResourcesEstimation(),
-              getMnemonic(),
-              OS.getCurrent(),
-              inputs.memoizedFlattenAndGetSize()));
+          // In coverage mode, .gcno file not produced for an empty translation unit.
+          /*mandatoryOutputs=*/ hasCoverageArtifact
+              ? ImmutableSet.copyOf(getOutputs().asList().subList(1, getOutputs().size()))
+              : null,
+          () ->
+              estimateResourceConsumptionLocal(
+                  enabledCppCompileResourcesEstimation(),
+                  getMnemonic(),
+                  OS.getCurrent(),
+                  inputs.memoizedFlattenAndGetSize()));
     } catch (CommandLineExpansionException e) {
       String message =
           String.format(
@@ -1600,27 +1647,35 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
   }
 
   /**
-   * Gcc only creates ".gcno" files if the compilation unit is non-empty. To ensure that the set of
+   * Gcc only creates a ".gcno" file if the compilation unit is non-empty. To ensure that the set of
    * outputs for a CppCompileAction remains consistent and doesn't vary dynamically depending on the
-   * _contents_ of the input files, we create empty ".gcno" files if gcc didn't create them.
+   * _contents_ of the input files, we create an empty ".gcno" file if gcc didn't create it.
    */
-  private void ensureCoverageNotesFilesExist(ActionExecutionContext actionExecutionContext)
+  private void ensureCoverageNotesFileExists(ActionExecutionContext actionExecutionContext)
       throws ActionExecutionException {
-    for (Artifact output : getOutputs()) {
-      if (output.isFileType(CppFileTypes.COVERAGE_NOTES)) { // ".gcno"
-        Path outputPath = actionExecutionContext.getInputPath(output);
-        if (outputPath.exists()) {
-          continue;
-        }
-        try {
-          FileSystemUtils.createEmptyFile(outputPath);
-        } catch (IOException e) {
-          String message = "Error creating file '" + outputPath + "': " + e.getMessage();
-          DetailedExitCode code =
-              createDetailedExitCode(message, Code.COVERAGE_NOTES_CREATION_FAILURE);
-          throw new ActionExecutionException(message, e, this, false, code);
-        }
-      }
+    if (!hasCoverageArtifact) {
+      return;
+    }
+    Artifact gcnoArtifact = getOutputs().iterator().next();
+    if (!gcnoArtifact.isFileType(CppFileTypes.COVERAGE_NOTES)) {
+      BugReport.sendBugReport(
+          new IllegalStateException(
+              "In coverage mode but gcno artifact is not first output: "
+                  + gcnoArtifact
+                  + ", "
+                  + this));
+      return;
+    }
+    Path outputPath = actionExecutionContext.getInputPath(gcnoArtifact);
+    if (outputPath.exists()) {
+      return;
+    }
+    try {
+      FileSystemUtils.createEmptyFile(outputPath);
+    } catch (IOException e) {
+      String message = "Error creating file '" + outputPath + "': " + e.getMessage();
+      DetailedExitCode code = createDetailedExitCode(message, Code.COVERAGE_NOTES_CREATION_FAILURE);
+      throw new ActionExecutionException(message, e, this, false, code);
     }
   }
 
@@ -1754,13 +1809,16 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
   @Nullable
   private static ImmutableMap<Artifact, NestedSet<Artifact>> computeTransitivelyUsedModules(
       SkyFunction.Environment env, Set<DerivedArtifact> usedModules) throws InterruptedException {
-    // Because this env.getValues call does not specify any exceptions, it is impossible for input
-    // discovery to recover from exceptions thrown by spurious module deps (for instance, if a
-    // commented-out include references a header file with an error in it). However, we generally
-    // don't try to recover from errors around spurious includes discovered in the current build.
+    // Because SkyframeIterableResult.next call does not specify any exceptions where
+    // SkyframeIterableResult is returned by env.getOrderedValuesAndExceptions, it is
+    // impossible for input discovery to recover from exceptions thrown by spurious module deps (for
+    // instance, if a commented-out include references a header file with an error in it). However,
+    // we generally don't try to recover from errors around spurious includes discovered in the
+    // current build.
     // TODO(janakr): Can errors be aggregated here at least?
-    Map<SkyKey, SkyValue> actionExecutionValues =
-        env.getValues(Collections2.transform(usedModules, DerivedArtifact::getGeneratingActionKey));
+    Collection<SkyKey> skyKeys =
+        Collections2.transform(usedModules, DerivedArtifact::getGeneratingActionKey);
+    SkyframeIterableResult actionExecutionValues = env.getOrderedValuesAndExceptions(skyKeys);
     if (env.valuesMissing()) {
       return null;
     }
@@ -1769,13 +1827,15 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
     for (DerivedArtifact module : usedModules) {
       Preconditions.checkState(
           module.isFileType(CppFileTypes.CPP_MODULE), "Non-module? %s", module);
+      SkyValue skyValue = actionExecutionValues.next();
+      if (skyValue == null) {
+        return null;
+      }
       ActionExecutionValue value =
-          Preconditions.checkNotNull(
-              (ActionExecutionValue) actionExecutionValues.get(module.getGeneratingActionKey()),
-              module);
+          Preconditions.checkNotNull((ActionExecutionValue) skyValue, module);
       transitivelyUsedModules.put(module, value.getDiscoveredModules());
     }
-    return transitivelyUsedModules.build();
+    return transitivelyUsedModules.buildOrThrow();
   }
 
   private final class CppCompileActionContinuation extends ActionContinuationOrResult {
@@ -1832,7 +1892,7 @@ public class CppCompileAction extends AbstractAction implements IncludeScannable
 
       copyTempOutErrToActionOutErr();
 
-      ensureCoverageNotesFilesExist(actionExecutionContext);
+      ensureCoverageNotesFileExists(actionExecutionContext);
 
       CppIncludeExtractionContext scanningContext =
           actionExecutionContext.getContext(CppIncludeExtractionContext.class);

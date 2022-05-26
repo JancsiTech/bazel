@@ -83,7 +83,7 @@ public class StarlarkNativeModule implements StarlarkNativeModuleApi {
   private static ImmutableMap<String, Object> initializeBindings() {
     ImmutableMap.Builder<String, Object> bindings = ImmutableMap.builder();
     Starlark.addMethods(bindings, new StarlarkNativeModule());
-    return bindings.build();
+    return bindings.buildOrThrow();
   }
 
   @Override
@@ -535,7 +535,7 @@ public class StarlarkNativeModule implements StarlarkNativeModuleApi {
     BazelStarlarkContext.from(thread).checkLoadingPhase("native.repository_name");
     PackageIdentifier packageId =
         PackageFactory.getContext(thread).getBuilder().getPackageIdentifier();
-    return packageId.getRepository().toString();
+    return packageId.getRepository().getNameWithAt();
   }
 
   private static Dict<String, Object> getRuleDict(Rule rule, Mutability mu) throws EvalException {
@@ -736,8 +736,13 @@ public class StarlarkNativeModule implements StarlarkNativeModuleApi {
     List<String> matches =
         runGlobOperation(
             context, thread, includes, excludes, Globber.Operation.SUBPACKAGES, allowEmpty);
-    matches.sort(naturalOrder());
-
+    if (!matches.isEmpty()) {
+      try {
+        matches.sort(naturalOrder());
+      } catch (UnsupportedOperationException e) {
+        matches = ImmutableList.sortedCopyOf(naturalOrder(), matches);
+      }
+    }
     return StarlarkList.copyOf(thread.mutability(), matches);
   }
 

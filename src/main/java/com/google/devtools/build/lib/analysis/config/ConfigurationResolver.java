@@ -51,8 +51,7 @@ import com.google.devtools.build.lib.skyframe.PlatformMappingValue;
 import com.google.devtools.build.lib.util.OrderedSetMultimap;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyFunction;
-import com.google.devtools.build.skyframe.SkyKey;
-import com.google.devtools.build.skyframe.ValueOrException;
+import com.google.devtools.build.skyframe.SkyframeIterableResult;
 import com.google.devtools.common.options.OptionsParsingException;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -228,7 +227,8 @@ public final class ConfigurationResolver {
       if (depConfig == null) {
         // Instead of returning immediately, give the loop a chance to queue up every missing
         // dependency, then return all at once. That prevents re-executing this code an unnecessary
-        // number of times. i.e. this is equivalent to calling env.getValues() once over all deps.
+        // number of times. i.e. this is equivalent to calling env.getOrderedValuesAndExceptions()
+        // once over all deps.
         needConfigsFromSkyframe = true;
       } else {
         resolvedDeps.putAll(dependencyKind, depConfig);
@@ -352,20 +352,19 @@ public final class ConfigurationResolver {
       throw new ConfiguredValueCreationException(ctgValue, e.getMessage());
     }
 
-    Map<SkyKey, ValueOrException<InvalidConfigurationException>> depConfigValues =
-        env.getValuesOrThrow(configurationKeys.values(), InvalidConfigurationException.class);
+    SkyframeIterableResult depConfigValues =
+        env.getOrderedValuesAndExceptions(configurationKeys.values());
     List<Dependency> dependencies = new ArrayList<>();
     try {
       for (Map.Entry<String, BuildConfigurationKey> entry : configurationKeys.entrySet()) {
         String transitionKey = entry.getKey();
-        ValueOrException<InvalidConfigurationException> valueOrException =
-            depConfigValues.get(entry.getValue());
-        if (valueOrException.get() == null) {
+        // TODO(blaze-configurability-team): Should be able to just use BuildConfigurationKey
+        BuildConfigurationValue configuration =
+            (BuildConfigurationValue)
+                depConfigValues.nextOrThrow(InvalidConfigurationException.class);
+        if (configuration == null) {
           continue;
         }
-        // TODO(blaze-configurability-team): Should be able to just use BuildConfigurationKey
-        BuildConfigurationValue configuration = (BuildConfigurationValue) valueOrException.get();
-        if (configuration != null) {
           Dependency resolvedDep =
               dependencyBuilder
                   // Copy the builder so we don't overwrite the other dependencies.
@@ -375,7 +374,6 @@ public final class ConfigurationResolver {
                   .setTransitionKey(transitionKey)
                   .build();
           dependencies.add(resolvedDep);
-        }
       }
       if (env.valuesMissing()) {
         return null; // Need dependency configurations.

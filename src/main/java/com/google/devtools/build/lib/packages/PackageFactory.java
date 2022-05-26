@@ -22,6 +22,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.actions.ThreadStateReceiver;
+import com.google.devtools.build.lib.cmdline.BazelModuleContext;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.cmdline.RepositoryMapping;
@@ -46,14 +47,13 @@ import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.RootedPath;
-import com.google.devtools.build.lib.vfs.UnixGlob;
+import com.google.devtools.build.lib.vfs.SyscallCache;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import net.starlark.java.eval.Dict;
 import net.starlark.java.eval.EvalException;
@@ -114,7 +114,7 @@ public final class PackageFactory {
   private final RuleFactory ruleFactory;
   private final RuleClassProvider ruleClassProvider;
 
-  private AtomicReference<? extends UnixGlob.FilesystemCalls> syscalls;
+  private SyscallCache syscallCache;
 
   private ForkJoinPool executor;
 
@@ -210,9 +210,9 @@ public final class PackageFactory {
             version);
   }
 
-  /** Sets the syscalls cache used in globbing. */
-  public void setSyscalls(AtomicReference<? extends UnixGlob.FilesystemCalls> syscalls) {
-    this.syscalls = Preconditions.checkNotNull(syscalls);
+  /** Sets the syscalls cache used in filesystem access. */
+  public void setSyscallCache(SyscallCache syscallCache) {
+    this.syscallCache = Preconditions.checkNotNull(syscallCache);
   }
 
   /**
@@ -296,7 +296,7 @@ public final class PackageFactory {
     for (PackageArgument<?> argument : arguments.build()) {
       packageArguments.put(argument.getName(), argument);
     }
-    return packageArguments.build();
+    return packageArguments.buildOrThrow();
   }
 
   /** Returns a function-value implementing "package" in the specified package context. */
@@ -382,7 +382,7 @@ public final class PackageFactory {
         result.put(ruleClassName, new BuiltinRuleFunction(cl));
       }
     }
-    return result.build();
+    return result.buildOrThrow();
   }
 
   /** A callable Starlark value that creates Rules for native RuleClasses. */
@@ -481,7 +481,7 @@ public final class PackageFactory {
             packageId,
             ignoredGlobPrefixes,
             locator,
-            syscalls,
+            syscallCache,
             executor,
             maxDirectoriesToEagerlyVisitInGlobbing,
             threadStateReceiverForMetrics));
@@ -706,7 +706,7 @@ public final class PackageFactory {
     return ImmutableList.copyOf(set);
   }
 
-  private static void transitiveClosureOfLabelsRec(
+  public static void transitiveClosureOfLabelsRec(
       Set<Label> set, ImmutableMap<String, Module> loads) {
     for (Module m : loads.values()) {
       BazelModuleContext ctx = BazelModuleContext.of(m);
@@ -761,7 +761,8 @@ public final class PackageFactory {
                 return;
               }
 
-              Expression excludeDirectories = null, include = null;
+              Expression excludeDirectories = null;
+              Expression include = null;
               List<Argument> arguments = call.getArguments();
               for (int i = 0; i < arguments.size(); i++) {
                 Argument arg = arguments.get(i);

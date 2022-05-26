@@ -361,7 +361,7 @@ public final class CcToolchainProvider extends NativeInfo
       result.put("ABI", getAbi());
     }
 
-    globalMakeEnvBuilder.putAll(result.build());
+    globalMakeEnvBuilder.putAll(result.buildOrThrow());
   }
 
   /**
@@ -571,6 +571,13 @@ public final class CcToolchainProvider extends NativeInfo
     }
   }
 
+  @Override
+  public String getArtifactNameForCategory(
+      String category, String outputName, StarlarkThread thread) throws EvalException {
+    CcModule.checkPrivateStarlarkificationAllowlist(thread);
+    return toolchainFeatures.getArtifactNameForCategory(
+        ArtifactCategory.valueOf(category), outputName);
+  }
   /**
    * Returns true if the featureConfiguration includes statically linking the cpp runtimes.
    *
@@ -833,6 +840,13 @@ public final class CcToolchainProvider extends NativeInfo
   // TODO(b/65151735): Remove when cc_flags is entirely from features.
   @Deprecated
   public String getLegacyCcFlagsMakeVariable() {
+    return legacyCcFlagsMakeVariable;
+  }
+
+  @Override
+  public String getLegacyCcFlagsMakeVariableForStarlark(StarlarkThread thread)
+      throws EvalException {
+    CcModule.checkPrivateStarlarkificationAllowlist(thread);
     return legacyCcFlagsMakeVariable;
   }
 

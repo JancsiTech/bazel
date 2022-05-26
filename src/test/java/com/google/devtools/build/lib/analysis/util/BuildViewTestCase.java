@@ -155,6 +155,7 @@ import com.google.devtools.build.lib.skyframe.BuildInfoCollectionFunction;
 import com.google.devtools.build.lib.skyframe.BzlLoadFunction;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
+import com.google.devtools.build.lib.skyframe.DiffAwareness;
 import com.google.devtools.build.lib.skyframe.ManagedDirectoriesKnowledge;
 import com.google.devtools.build.lib.skyframe.PackageFunction;
 import com.google.devtools.build.lib.skyframe.PackageRootsNoSymlinkCreation;
@@ -175,7 +176,7 @@ import com.google.devtools.build.lib.vfs.ModifiedFileSet;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Root;
-import com.google.devtools.build.lib.vfs.UnixGlob;
+import com.google.devtools.build.lib.vfs.SyscallCache;
 import com.google.devtools.build.skyframe.ErrorInfo;
 import com.google.devtools.build.skyframe.InMemoryMemoizingEvaluator;
 import com.google.devtools.build.skyframe.MemoizingEvaluator;
@@ -249,6 +250,14 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
   }
 
   public void initializeSkyframeExecutor(boolean doPackageLoadingChecks) throws Exception {
+    initializeSkyframeExecutor(
+        /*doPackageLoadingChecks=*/ doPackageLoadingChecks,
+        /*diffAwarenessFactories=*/ ImmutableList.of());
+  }
+
+  public void initializeSkyframeExecutor(
+      boolean doPackageLoadingChecks, ImmutableList<DiffAwareness.Factory> diffAwarenessFactories)
+      throws Exception {
     analysisMock = getAnalysisMock();
     directories =
         new BlazeDirectories(
@@ -313,7 +322,9 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
             .setDirectories(directories)
             .setActionKeyContext(actionKeyContext)
             .setWorkspaceStatusActionFactory(workspaceStatusActionFactory)
-            .setExtraSkyFunctions(analysisMock.getSkyFunctions(directories));
+            .setExtraSkyFunctions(analysisMock.getSkyFunctions(directories))
+            .setPerCommandSyscallCache(SyscallCache.NO_CACHE)
+            .setDiffAwarenessFactories(diffAwarenessFactories);
     ManagedDirectoriesKnowledge managedDirectoriesKnowledge = getManagedDirectoriesKnowledge();
     if (managedDirectoriesKnowledge != null) {
       builder.setRepositoryHelpersHolder(
@@ -461,10 +472,16 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
 
     // TODO(blaze-configurability): It would be nice to be able to do some starlark options loading
     // to ensure that the values given in this map are the right types for their keys.
+    // TODO(blaze-configurability): It is actually incorrect that build options are potentially
+    // being explicitly set to their default values. In production, Starlark options set to their
+    // default are always null (and various parts of the infra rely on this).
     optionsParser.setStarlarkOptions(starlarkOptions);
 
     BuildOptions buildOptions =
         BuildOptions.of(ruleClassProvider.getFragmentRegistry().getOptionsClasses(), optionsParser);
+    // This is being done outside of BuildView, potentially even before the BuildView was
+    // constructed and thus cannot rely on BuildView having injected this for us.
+    skyframeExecutor.setBaselineConfiguration(buildOptions);
     return skyframeExecutor.createConfigurations(reporter, buildOptions, ImmutableSet.of(), false);
   }
 
@@ -830,6 +847,16 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
 
   protected ActionGraph getActionGraph() {
     return skyframeExecutor.getActionGraph(reporter);
+  }
+
+  /** Returns all arguments used by the action. */
+  protected final ImmutableList<String> allArgsForAction(SpawnAction action) throws Exception {
+    ImmutableList.Builder<String> args = new ImmutableList.Builder<>();
+    List<CommandLineAndParamFileInfo> commandLines = action.getCommandLines().getCommandLines();
+    for (CommandLineAndParamFileInfo pair : commandLines.subList(1, commandLines.size())) {
+      args.addAll(pair.commandLine.arguments());
+    }
+    return args.build();
   }
 
   /** Locates the first parameter file used by the action and returns its command line. */
@@ -1633,9 +1660,9 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
 
   /**
    * Gets a derived Artifact for testing in the subdirectory of the {@link
-   * BuildConfigurationValue#getIncludeDirectory} corresponding to the package of {@code owner}. So
-   * to specify a file foo/foo.o owned by target //foo:foo, {@code packageRelativePath} should just
-   * be "foo.h".
+   * BuildConfigurationValue#getBuildInfoDirectory} corresponding to the package of {@code owner}.
+   * So to specify a file foo/foo.o owned by target //foo:foo, {@code packageRelativePath} should
+   * just be "foo.h".
    */
   protected Artifact getIncludeArtifact(String packageRelativePath, String owner) {
     return getIncludeArtifact(packageRelativePath, makeConfiguredTargetKey(owner));
@@ -1643,14 +1670,14 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
 
   /**
    * Gets a derived Artifact for testing in the subdirectory of the {@link
-   * BuildConfigurationValue#getIncludeDirectory} corresponding to the package of {@code owner}. So
-   * to specify a file foo/foo.o owned by target //foo:foo, {@code packageRelativePath} should just
-   * be "foo.h".
+   * BuildConfigurationValue#getBuildInfoDirectory} corresponding to the package of {@code owner}.
+   * So to specify a file foo/foo.o owned by target //foo:foo, {@code packageRelativePath} should
+   * just be "foo.h".
    */
   protected Artifact getIncludeArtifact(String packageRelativePath, ArtifactOwner owner) {
     return getPackageRelativeDerivedArtifact(
         packageRelativePath,
-        targetConfig.getIncludeDirectory(owner.getLabel().getRepository()),
+        targetConfig.getBuildInfoDirectory(owner.getLabel().getRepository()),
         owner);
   }
 
@@ -2190,11 +2217,6 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     }
 
     @Override
-    public Artifact getSourceArtifactForNinjaBuild(PathFragment execPath, Root root) {
-      throw new UnsupportedOperationException();
-    }
-
-    @Override
     public ExtendedEventHandler getEventHandler() {
       return reporter;
     }
@@ -2501,7 +2523,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
           /*actionFileSystem=*/ null,
           /*skyframeDepsResult*/ null,
           DiscoveredModulesPruner.DEFAULT,
-          UnixGlob.DEFAULT_SYSCALLS,
+          SyscallCache.NO_CACHE,
           ThreadStateReceiver.NULL_INSTANCE);
     }
   }

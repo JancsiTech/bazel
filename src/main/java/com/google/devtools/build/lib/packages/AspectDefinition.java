@@ -19,11 +19,10 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Iterables;
-import com.google.common.collect.Lists;
 import com.google.common.collect.Multimap;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProvider;
 import com.google.devtools.build.lib.analysis.config.Fragment;
+import com.google.devtools.build.lib.analysis.config.ToolchainTypeRequirement;
 import com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTransition;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
@@ -32,12 +31,12 @@ import com.google.devtools.build.lib.packages.ConfigurationFragmentPolicy.Missin
 import com.google.devtools.build.lib.packages.Type.LabelClass;
 import com.google.devtools.build.lib.packages.Type.LabelVisitor;
 import java.io.Serializable;
-import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.BiPredicate;
 import javax.annotation.Nullable;
@@ -67,8 +66,7 @@ public final class AspectDefinition {
   private final RequiredProviders requiredProviders;
   private final RequiredProviders requiredProvidersForAspects;
   private final ImmutableMap<String, Attribute> attributes;
-  private final ImmutableSet<Label> requiredToolchains;
-  private final boolean useToolchainTransition;
+  private final ImmutableSet<ToolchainTypeRequirement> toolchainTypes;
 
   /**
    * Which attributes aspect should propagate along:
@@ -103,8 +101,7 @@ public final class AspectDefinition {
       RequiredProviders requiredProviders,
       RequiredProviders requiredProvidersForAspects,
       ImmutableMap<String, Attribute> attributes,
-      ImmutableSet<Label> requiredToolchains,
-      boolean useToolchainTransition,
+      ImmutableSet<ToolchainTypeRequirement> toolchainTypes,
       @Nullable ImmutableSet<String> restrictToAttributes,
       @Nullable ConfigurationFragmentPolicy configurationFragmentPolicy,
       boolean applyToFiles,
@@ -115,10 +112,8 @@ public final class AspectDefinition {
     this.advertisedProviders = advertisedProviders;
     this.requiredProviders = requiredProviders;
     this.requiredProvidersForAspects = requiredProvidersForAspects;
-
     this.attributes = attributes;
-    this.requiredToolchains = requiredToolchains;
-    this.useToolchainTransition = useToolchainTransition;
+    this.toolchainTypes = toolchainTypes;
     this.restrictToAttributes = restrictToAttributes;
     this.configurationFragmentPolicy = configurationFragmentPolicy;
     this.applyToFiles = applyToFiles;
@@ -141,12 +136,8 @@ public final class AspectDefinition {
   }
 
   /** Returns the required toolchains declared by this aspect. */
-  public ImmutableSet<Label> getRequiredToolchains() {
-    return requiredToolchains;
-  }
-
-  public boolean useToolchainTransition() {
-    return useToolchainTransition;
+  public ImmutableSet<ToolchainTypeRequirement> getToolchainTypes() {
+    return toolchainTypes;
   }
 
   /**
@@ -281,8 +272,7 @@ public final class AspectDefinition {
         new ConfigurationFragmentPolicy.Builder();
     private boolean applyToFiles = false;
     private boolean applyToGeneratingRules = false;
-    private final List<Label> requiredToolchains = new ArrayList<>();
-    private boolean useToolchainTransition = false;
+    private final Set<ToolchainTypeRequirement> toolchainTypes = new HashSet<>();
     private ImmutableSet<AspectClass> requiredAspectClasses = ImmutableSet.of();
 
     public Builder(AspectClass aspectClass) {
@@ -587,19 +577,13 @@ public final class AspectDefinition {
     }
 
     /** Adds the given toolchains as requirements for this aspect. */
-    public Builder addRequiredToolchains(Label... toolchainLabels) {
-      Iterables.addAll(this.requiredToolchains, Lists.newArrayList(toolchainLabels));
-      return this;
+    public Builder addToolchainTypes(ToolchainTypeRequirement... toolchainTypes) {
+      return this.addToolchainTypes(ImmutableSet.copyOf(toolchainTypes));
     }
 
     /** Adds the given toolchains as requirements for this aspect. */
-    public Builder addRequiredToolchains(List<Label> requiredToolchains) {
-      this.requiredToolchains.addAll(requiredToolchains);
-      return this;
-    }
-
-    public Builder useToolchainTransition(boolean useToolchainTransition) {
-      this.useToolchainTransition = useToolchainTransition;
+    public Builder addToolchainTypes(Collection<ToolchainTypeRequirement> toolchainTypes) {
+      this.toolchainTypes.addAll(toolchainTypes);
       return this;
     }
 
@@ -622,8 +606,7 @@ public final class AspectDefinition {
           requiredProviders,
           requiredAspectProviders.build(),
           ImmutableMap.copyOf(attributes),
-          ImmutableSet.copyOf(requiredToolchains),
-          useToolchainTransition,
+          ImmutableSet.copyOf(toolchainTypes),
           propagateAlongAttributes == null ? null : ImmutableSet.copyOf(propagateAlongAttributes),
           configurationFragmentPolicy.build(),
           applyToFiles,

@@ -506,7 +506,20 @@ public class CppOptions extends FragmentOptions {
       category = "flags",
       documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
       effectTags = {OptionEffectTag.ACTION_COMMAND_LINES, OptionEffectTag.AFFECTS_OUTPUTS},
-      help = "The layout file for propeller code layout optimizations.")
+      help =
+          "Use Propeller profile information to optimize the build target."
+              + "A propeller profile must consist of at least one of two files, a cc profile "
+              + "and a ld profile.  This flag accepts a build label which must refer to "
+              + "the propeller profile input files. For example, the BUILD file that "
+              + "defines the label, in a/b/BUILD:"
+              + "propeller_optimize("
+              + "    name = \"propeller_profile\","
+              + "    cc_profile = \"propeller_cc_profile.txt\","
+              + "    ld_profile = \"propeller_ld_profile.txt\","
+              + ")"
+              + "An exports_files directive may have to be added to the corresponding package "
+              + "to make these files visible to Bazel. The option must be used as: "
+              + "--propeller_optimize=//a/b:propeller_profile")
   public Label propellerOptimizeLabel;
 
   public Label getPropellerOptimizeLabel() {
@@ -889,17 +902,6 @@ public class CppOptions extends FragmentOptions {
   public boolean useSpecificToolFiles;
 
   @Option(
-      name = "incompatible_disable_static_cc_toolchains",
-      defaultValue = "true",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
-      metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
-      help =
-          "@bazel_tools//tools/cpp:default-toolchain target was removed."
-              + "See https://github.com/bazelbuild/bazel/issues/8546.")
-  public boolean disableStaticCcToolchains;
-
-  @Option(
       name = "incompatible_disable_nocopts",
       defaultValue = "true",
       documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
@@ -1047,15 +1049,15 @@ public class CppOptions extends FragmentOptions {
   public boolean objcGenerateDotdFiles;
 
   @Option(
-      name = "experimental_cc_implementation_deps",
+      name = "experimental_cc_interface_deps",
       defaultValue = "false",
       documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
       effectTags = {
         OptionEffectTag.LOADING_AND_ANALYSIS,
       },
       metadataTags = {OptionMetadataTag.EXPERIMENTAL},
-      help = "If enabled, cc_library targets can use attribute `implementation_deps`.")
-  public boolean experimentalCcImplementationDeps;
+      help = "If enabled, cc_library targets can use attribute `interface_deps`.")
+  public boolean experimentalCcInterfaceDeps;
 
   @Option(
       name = "experimental_link_static_libraries_once",
@@ -1175,7 +1177,7 @@ public class CppOptions extends FragmentOptions {
     host.experimentalLinkStaticLibrariesOnce = experimentalLinkStaticLibrariesOnce;
     host.experimentalEnableTargetExportCheck = experimentalEnableTargetExportCheck;
     host.experimentalCcSharedLibraryDebug = experimentalCcSharedLibraryDebug;
-    host.experimentalCcImplementationDeps = experimentalCcImplementationDeps;
+    host.experimentalCcInterfaceDeps = experimentalCcInterfaceDeps;
 
     host.coptList = coptListBuilder.addAll(hostCoptList).build();
     host.cxxoptList = cxxoptListBuilder.addAll(hostCxxoptList).build();
@@ -1200,7 +1202,6 @@ public class CppOptions extends FragmentOptions {
     host.requireCtxInConfigureFeatures = requireCtxInConfigureFeatures;
     host.useStandaloneLtoIndexingCommandLines = useStandaloneLtoIndexingCommandLines;
     host.useSpecificToolFiles = useSpecificToolFiles;
-    host.disableStaticCcToolchains = disableStaticCcToolchains;
     host.disableNoCopts = disableNoCopts;
     host.loadCcRulesFromBzl = loadCcRulesFromBzl;
     host.validateTopLevelHeaderInclusions = validateTopLevelHeaderInclusions;

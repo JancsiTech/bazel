@@ -17,6 +17,7 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.assertThrows;
 
 import com.google.common.base.Functions;
+import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -29,10 +30,13 @@ import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ServerDirectories;
 import com.google.devtools.build.lib.analysis.util.AnalysisMock;
+import com.google.devtools.build.lib.clock.BlazeClock;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.events.NullEventHandler;
+import com.google.devtools.build.lib.io.FileSymlinkCycleUniquenessFunction;
 import com.google.devtools.build.lib.io.InconsistentFilesystemException;
 import com.google.devtools.build.lib.packages.Globber;
+import com.google.devtools.build.lib.packages.Globber.Operation;
 import com.google.devtools.build.lib.packages.RuleClassProvider;
 import com.google.devtools.build.lib.packages.WorkspaceFileValue;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
@@ -42,14 +46,17 @@ import com.google.devtools.build.lib.skyframe.GlobValue.InvalidGlobPatternExcept
 import com.google.devtools.build.lib.skyframe.PackageLookupFunction.CrossRepositoryLabelViolationStrategy;
 import com.google.devtools.build.lib.testutil.ManualClock;
 import com.google.devtools.build.lib.testutil.TestConstants;
+import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.Dirent;
+import com.google.devtools.build.lib.vfs.FileStateKey;
 import com.google.devtools.build.lib.vfs.FileStatus;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Root;
 import com.google.devtools.build.lib.vfs.RootedPath;
+import com.google.devtools.build.lib.vfs.SyscallCache;
 import com.google.devtools.build.lib.vfs.UnixGlob;
 import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
 import com.google.devtools.build.skyframe.ErrorInfo;
@@ -158,8 +165,7 @@ public abstract class GlobFunctionTest {
     skyFunctions.put(SkyFunctions.GLOB, new GlobFunction(alwaysUseDirListing()));
     skyFunctions.put(
         SkyFunctions.DIRECTORY_LISTING_STATE,
-        new DirectoryListingStateFunction(
-            externalFilesHelper, new AtomicReference<>(UnixGlob.DEFAULT_SYSCALLS)));
+        new DirectoryListingStateFunction(externalFilesHelper, SyscallCache.NO_CACHE));
     skyFunctions.put(SkyFunctions.DIRECTORY_LISTING, new DirectoryListingFunction());
     skyFunctions.put(
         SkyFunctions.PACKAGE_LOOKUP,
@@ -172,13 +178,14 @@ public abstract class GlobFunctionTest {
         SkyFunctions.IGNORED_PACKAGE_PREFIXES,
         BazelSkyframeExecutorConstants.IGNORED_PACKAGE_PREFIXES_FUNCTION);
     skyFunctions.put(
-        FileStateValue.FILE_STATE,
+        FileStateKey.FILE_STATE,
         new FileStateFunction(
-            new AtomicReference<>(),
-            new AtomicReference<>(UnixGlob.DEFAULT_SYSCALLS),
+            Suppliers.ofInstance(new TimestampGranularityMonitor(BlazeClock.instance())),
+            SyscallCache.NO_CACHE,
             externalFilesHelper));
-    skyFunctions.put(FileValue.FILE, new FileFunction(pkgLocator));
-
+    skyFunctions.put(FileValue.FILE, new FileFunction(pkgLocator, directories));
+    skyFunctions.put(
+        FileSymlinkCycleUniquenessFunction.NAME, new FileSymlinkCycleUniquenessFunction());
     AnalysisMock analysisMock = AnalysisMock.get();
     RuleClassProvider ruleClassProvider = analysisMock.createRuleClassProvider();
     skyFunctions.put(
@@ -557,7 +564,10 @@ public abstract class GlobFunctionTest {
     FileSystemUtils.createEmptyFile(pkgPath.getChild("aab"));
     // Note: this contains two asterisks because otherwise a RE is not built,
     // as an optimization.
-    assertThat(UnixGlob.forPath(pkgPath).addPattern("*a.b*").globInterruptible())
+    assertThat(
+            new UnixGlob.Builder(pkgPath, SyscallCache.NO_CACHE)
+                .addPattern("*a.b*")
+                .globInterruptible())
         .containsExactly(aDotB);
   }
 
@@ -646,6 +656,15 @@ public abstract class GlobFunctionTest {
   }
 
   @Test
+  public void testDoubleStarPatternWithErrorChild() throws Exception {
+    FileSystemUtils.ensureSymbolicLink(pkgPath.getChild("self"), "self");
+
+    IOException ioException =
+        assertThrows(IOException.class, () -> runGlob("**/self", Operation.FILES));
+    assertThat(ioException).hasMessageThat().matches("Symlink cycle");
+  }
+
+  @Test
   public void testDoubleStarPatternWithChildGlob() throws Exception {
     assertGlobMatches("**/ba*", "foo/bar", "foo/barnacle", "food/barnacle", "fool/barnacle");
   }
@@ -673,13 +692,35 @@ public abstract class GlobFunctionTest {
     assertGlobMatches("foo/bar/wiz/file/**" /* => nothing */);
   }
 
+  /** Regression test for b/225434889: Value with exception will not crash. */
+  @Test
+  public void symlinkFileValueWithError() throws Exception {
+    FileSystemUtils.ensureSymbolicLink(pkgPath.getChild("self"), "self");
+
+    IOException ioException =
+        assertThrows(IOException.class, () -> runGlob("self", Operation.FILES_AND_DIRS));
+    assertThat(ioException).hasMessageThat().matches("Symlink cycle");
+  }
+
+  @Test
+  public void symlinkSubdirValueWithError() throws Exception {
+    Path cycle = pkgPath.getChild("cycle");
+    FileSystemUtils.ensureSymbolicLink(cycle.getChild("self"), "self");
+    FileSystemUtils.ensureSymbolicLink(pkgPath.getChild("symlink"), cycle);
+
+    IOException ioException =
+        assertThrows(IOException.class, () -> runGlob("symlink/self", Operation.FILES_AND_DIRS));
+    assertThat(ioException).hasMessageThat().matches("Symlink cycle");
+  }
+
   /** Regression test for b/13319874: Directory listing crash. */
   @Test
   public void testResilienceToFilesystemInconsistencies_directoryExistence() throws Exception {
     // Our custom filesystem says "pkgPath/BUILD" exists but "pkgPath" does not exist.
     fs.stubStat(pkgPath, null);
     RootedPath pkgRootedPath = RootedPath.toRootedPath(Root.fromPath(root), pkgPath);
-    FileStateValue pkgDirFileStateValue = FileStateValue.create(pkgRootedPath, null);
+    FileStateValue pkgDirFileStateValue =
+        FileStateValue.create(pkgRootedPath, SyscallCache.NO_CACHE, /*tsgm=*/ null);
     FileValue pkgDirValue =
         FileValue.value(
             ImmutableList.of(pkgRootedPath),

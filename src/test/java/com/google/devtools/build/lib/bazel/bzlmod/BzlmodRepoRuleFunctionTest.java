@@ -19,12 +19,12 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.fail;
 
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.hash.HashFunction;
-import com.google.devtools.build.lib.actions.FileStateValue;
 import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.actions.ThreadStateReceiver;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
@@ -32,6 +32,7 @@ import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ServerDirectories;
 import com.google.devtools.build.lib.analysis.util.AnalysisMock;
 import com.google.devtools.build.lib.bazel.repository.starlark.StarlarkRepositoryModule;
+import com.google.devtools.build.lib.clock.BlazeClock;
 import com.google.devtools.build.lib.cmdline.RepositoryMapping;
 import com.google.devtools.build.lib.packages.PackageFactory;
 import com.google.devtools.build.lib.packages.Rule;
@@ -49,6 +50,7 @@ import com.google.devtools.build.lib.skyframe.FileStateFunction;
 import com.google.devtools.build.lib.skyframe.IgnoredPackagePrefixesFunction;
 import com.google.devtools.build.lib.skyframe.LocalRepositoryLookupFunction;
 import com.google.devtools.build.lib.skyframe.PackageFunction;
+import com.google.devtools.build.lib.skyframe.PackageFunction.GlobbingStrategy;
 import com.google.devtools.build.lib.skyframe.PackageLookupFunction;
 import com.google.devtools.build.lib.skyframe.PackageLookupFunction.CrossRepositoryLabelViolationStrategy;
 import com.google.devtools.build.lib.skyframe.PrecomputedFunction;
@@ -58,9 +60,11 @@ import com.google.devtools.build.lib.skyframe.SkyFunctions;
 import com.google.devtools.build.lib.starlarkbuildapi.repository.RepositoryBootstrap;
 import com.google.devtools.build.lib.testutil.FoundationTestCase;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
+import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
+import com.google.devtools.build.lib.vfs.FileStateKey;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Root;
-import com.google.devtools.build.lib.vfs.UnixGlob;
+import com.google.devtools.build.lib.vfs.SyscallCache;
 import com.google.devtools.build.skyframe.EvaluationContext;
 import com.google.devtools.build.skyframe.EvaluationResult;
 import com.google.devtools.build.skyframe.InMemoryMemoizingEvaluator;
@@ -68,10 +72,7 @@ import com.google.devtools.build.skyframe.MemoizingEvaluator;
 import com.google.devtools.build.skyframe.RecordingDifferencer;
 import com.google.devtools.build.skyframe.SequencedRecordingDifferencer;
 import com.google.devtools.build.skyframe.SkyFunction;
-import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyFunctionName;
-import com.google.devtools.build.skyframe.SkyKey;
-import com.google.devtools.build.skyframe.SkyValue;
 import java.util.concurrent.atomic.AtomicReference;
 import net.starlark.java.eval.StarlarkSemantics;
 import org.junit.Before;
@@ -125,12 +126,13 @@ public final class BzlmodRepoRuleFunctionTest extends FoundationTestCase {
     evaluator =
         new InMemoryMemoizingEvaluator(
             ImmutableMap.<SkyFunctionName, SkyFunction>builder()
-                .put(FileValue.FILE, new FileFunction(packageLocator))
+                .put(FileValue.FILE, new FileFunction(packageLocator, directories))
                 .put(
-                    FileStateValue.FILE_STATE,
+                    FileStateKey.FILE_STATE,
                     new FileStateFunction(
-                        new AtomicReference<>(),
-                        new AtomicReference<>(UnixGlob.DEFAULT_SYSCALLS),
+                        Suppliers.ofInstance(
+                            new TimestampGranularityMonitor(BlazeClock.instance())),
+                        SyscallCache.NO_CACHE,
                         externalFilesHelper))
                 .put(
                     BzlmodRepoRuleValue.BZLMOD_REPO_RULE,
@@ -146,12 +148,12 @@ public final class BzlmodRepoRuleFunctionTest extends FoundationTestCase {
                         /*packageFactory=*/ null,
                         /*pkgLocator=*/ null,
                         /*showLoadingProgress=*/ null,
-                        /*numPackagesLoaded=*/ null,
+                        /*numPackagesSuccessfullyLoaded=*/ null,
                         /*bzlLoadFunctionForInlining=*/ null,
                         /*packageProgress=*/ null,
                         PackageFunction.ActionOnIOExceptionReadingBuildFile.UseOriginalIOException
                             .INSTANCE,
-                        PackageFunction.IncrementalityIntent.INCREMENTAL,
+                        GlobbingStrategy.SKYFRAME_HYBRID,
                         ignored -> ThreadStateReceiver.NULL_INSTANCE))
                 .put(
                     SkyFunctions.PACKAGE_LOOKUP,
@@ -168,36 +170,23 @@ public final class BzlmodRepoRuleFunctionTest extends FoundationTestCase {
                         pkgFactory, directories, hashFunction, Caffeine.newBuilder().build()))
                 .put(
                     SkyFunctions.BAZEL_MODULE_RESOLUTION,
-                    new SkyFunction() {
-                      @Override
-                      public SkyValue compute(SkyKey skyKey, Environment env)
-                          throws SkyFunctionException {
-                        // Dummy function that returns a dep graph with just the root module in it.
-                        return BazelModuleResolutionFunction.createValue(
+                    // Dummy function that returns a dep graph with just the root module in it.
+                    (skyKey, env) ->
+                        BazelModuleResolutionFunction.createValue(
                             ImmutableMap.of(ModuleKey.ROOT, Module.builder().build()),
-                            ImmutableMap.of());
-                      }
-                    })
+                            ImmutableMap.of(ModuleKey.ROOT, Module.builder().build()),
+                            ImmutableMap.of()))
                 .put(
                     SkyFunctions.REPOSITORY_MAPPING,
-                    new SkyFunction() {
-                      @Override
-                      public SkyValue compute(SkyKey skyKey, Environment env) {
-                        // Dummy function that always falls back.
-                        return RepositoryMappingValue.withMapping(
-                            RepositoryMapping.ALWAYS_FALLBACK);
-                      }
-                    })
+                    // Dummy function that always falls back.
+                    (skyKey, env) ->
+                        RepositoryMappingValue.withMapping(RepositoryMapping.ALWAYS_FALLBACK))
                 .put(
                     SkyFunctions.MODULE_EXTENSION_RESOLUTION,
-                    new SkyFunction() {
-                      @Override
-                      public SkyValue compute(SkyKey skyKey, Environment env) {
-                        // Dummy function that returns nothing.
-                        return ModuleExtensionResolutionValue.create(
-                            ImmutableMap.of(), ImmutableMap.of(), ImmutableListMultimap.of());
-                      }
-                    })
+                    // Dummy function that returns nothing.
+                    (skyKey, env) ->
+                        ModuleExtensionResolutionValue.create(
+                            ImmutableMap.of(), ImmutableMap.of(), ImmutableListMultimap.of()))
                 .put(SkyFunctions.CONTAINING_PACKAGE_LOOKUP, new ContainingPackageLookupFunction())
                 .put(
                     SkyFunctions.IGNORED_PACKAGE_PREFIXES,
@@ -279,44 +268,7 @@ public final class BzlmodRepoRuleFunctionTest extends FoundationTestCase {
                             ImmutableList.of(
                                 "https://maven.google.com", "https://repo1.maven.org/maven2")))
                 .build());
-    return new FakeBzlmodRepoRuleHelper(repoSpecs.build());
-  }
-
-  @Test
-  public void createRepoRule_bazelTools() throws Exception {
-    EvaluationResult<BzlmodRepoRuleValue> result =
-        evaluator.evaluate(
-            ImmutableList.of(BzlmodRepoRuleValue.key("bazel_tools")), evaluationContext);
-    if (result.hasError()) {
-      fail(result.getError().toString());
-    }
-    BzlmodRepoRuleValue bzlmodRepoRuleValue = result.get(BzlmodRepoRuleValue.key("bazel_tools"));
-    Rule repoRule = bzlmodRepoRuleValue.getRule();
-
-    assertThat(repoRule.getRuleClass()).isEqualTo("local_repository");
-    assertThat(repoRule.getName()).isEqualTo("bazel_tools");
-    // In the test, the install base is set to rootDirectory, which is "/workspace".
-    assertThat(repoRule.getAttr("path", Type.STRING)).isEqualTo("/workspace/embedded_tools");
-  }
-
-  @Test
-  public void createRepoRule_localConfigPlatform() throws Exception {
-    // Skip this test in Blaze because local_config_platform is not available.
-    if (!AnalysisMock.get().isThisBazel()) {
-      return;
-    }
-    EvaluationResult<BzlmodRepoRuleValue> result =
-        evaluator.evaluate(
-            ImmutableList.of(BzlmodRepoRuleValue.key("local_config_platform")), evaluationContext);
-    if (result.hasError()) {
-      fail(result.getError().toString());
-    }
-    BzlmodRepoRuleValue bzlmodRepoRuleValue =
-        result.get(BzlmodRepoRuleValue.key("local_config_platform"));
-    Rule repoRule = bzlmodRepoRuleValue.getRule();
-
-    assertThat(repoRule.getRuleClass()).isEqualTo("local_config_platform");
-    assertThat(repoRule.getName()).isEqualTo("local_config_platform");
+    return new FakeBzlmodRepoRuleHelper(repoSpecs.buildOrThrow());
   }
 
   @Test

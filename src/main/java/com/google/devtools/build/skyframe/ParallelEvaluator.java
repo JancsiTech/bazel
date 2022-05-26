@@ -61,8 +61,9 @@ public class ParallelEvaluator extends AbstractParallelEvaluator {
   public ParallelEvaluator(
       ProcessableGraph graph,
       Version graphVersion,
+      Version minimalVersion,
       ImmutableMap<SkyFunctionName, SkyFunction> skyFunctions,
-      final ExtendedEventHandler reporter,
+      ExtendedEventHandler reporter,
       EmittedEventState emittedEventState,
       EventFilter storedEventFilter,
       ErrorInfoManager errorInfoManager,
@@ -77,6 +78,7 @@ public class ParallelEvaluator extends AbstractParallelEvaluator {
     super(
         graph,
         graphVersion,
+        minimalVersion,
         skyFunctions,
         reporter,
         emittedEventState,
@@ -464,9 +466,18 @@ public class ParallelEvaluator extends AbstractParallelEvaluator {
           && error.getException() != null
           && (error.getException() instanceof IOException
               || error.getException().getClass().getName().endsWith("SourceArtifactException"))) {
+        String skyFunctionName = parent.functionName().getName();
+        if (!skyFunctionName.startsWith("FILE")
+            && !skyFunctionName.startsWith("DIRECTORY_LISTING")) {
+          logger.atInfo().log(
+              "SkyFunction did not rethrow error, may be a bug that it did not expect one: %s"
+                  + " via %s, %s (%s)",
+              errorKey, childErrorKey, error, bubbleErrorInfo);
+        }
+      }
+      if (completedRun && !env.encounteredErrorDuringBubbling()) {
         logger.atInfo().log(
-            "SkyFunction did not rethrow error, may be a bug that it did not expect one: %s"
-                + " via %s, %s (%s)",
+            "Skyfunction did not encounter error: %s via %s, %s (%s)",
             errorKey, childErrorKey, error, bubbleErrorInfo);
       }
       // Builder didn't throw its own exception, so just propagate this one up.
@@ -498,7 +509,7 @@ public class ParallelEvaluator extends AbstractParallelEvaluator {
    * <p>{@code visitor} may be null, but only in the case where all graph entries corresponding to
    * {@code skyKeys} are known to be in the DONE state ({@code entry.isDone()} returns true).
    */
-  <T extends SkyValue> EvaluationResult<T> constructResult(
+  private <T extends SkyValue> EvaluationResult<T> constructResult(
       Iterable<SkyKey> skyKeys,
       @Nullable Map<SkyKey, ValueWithMetadata> bubbleErrorInfo,
       boolean catastrophe)

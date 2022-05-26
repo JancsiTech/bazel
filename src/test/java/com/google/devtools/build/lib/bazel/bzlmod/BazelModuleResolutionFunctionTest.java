@@ -78,7 +78,7 @@ public class BazelModuleResolutionFunctionTest {
                     .setVersion(Version.parse("1.0"))
                     .setKey(createModuleKey("rules_java", ""))
                     .build())
-            .build();
+            .buildOrThrow();
     ImmutableMap<String, ModuleOverride> overrides =
         ImmutableMap.of(
             "dep",
@@ -87,7 +87,7 @@ public class BazelModuleResolutionFunctionTest {
             "rules_java", LocalPathOverride.create("bleh"));
 
     BazelModuleResolutionValue value =
-        BazelModuleResolutionFunction.createValue(depGraph, overrides);
+        BazelModuleResolutionFunction.createValue(depGraph, depGraph, overrides);
     assertThat(value.getCanonicalRepoNameLookup())
         .containsExactly(
             "", ModuleKey.ROOT,
@@ -161,7 +161,7 @@ public class BazelModuleResolutionFunctionTest {
             Label.parseAbsoluteUnchecked("@dep.2.0//incredible:conflict.bzl"), "myext");
 
     BazelModuleResolutionValue value =
-        BazelModuleResolutionFunction.createValue(depGraph, ImmutableMap.of());
+        BazelModuleResolutionFunction.createValue(depGraph, depGraph, ImmutableMap.of());
     assertThat(value.getExtensionUsagesTable()).hasSize(5);
     assertThat(value.getExtensionUsagesTable())
         .containsCell(maven, ModuleKey.ROOT, root.getExtensionUsages().get(0));

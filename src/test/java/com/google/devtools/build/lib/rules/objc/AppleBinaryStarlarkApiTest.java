@@ -45,7 +45,6 @@ import com.google.devtools.build.lib.rules.objc.CompilationSupport.ExtraLinkArgs
 import com.google.devtools.build.lib.testutil.Scratch;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import net.starlark.java.eval.Dict;
@@ -54,10 +53,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/**
- * Test cases for the Starlark Apple Linking API, {@code apple_common.link_multi_arch_binary}. These
- * tests verify that the API has parity with the native {@code apple_binary} rule.
- */
+/** Test cases for the Starlark Apple Linking API, {@code apple_common.link_multi_arch_binary}. */
 @RunWith(JUnit4.class)
 public class AppleBinaryStarlarkApiTest extends ObjcRuleTestCase {
   static final RuleType RULE_TYPE =
@@ -360,11 +356,6 @@ public class AppleBinaryStarlarkApiTest extends ObjcRuleTestCase {
     checkObjcLibraryLinkoptsArePropagatedToLinkAction(getRuleType());
   }
 
-  @Test
-  public void testAvoidDepsObjectsWithCrosstool() throws Exception {
-    checkAvoidDepsObjectsWithCrosstool(getRuleType());
-  }
-
   /** Returns the bcsymbolmap artifact for given architecture and compilation mode. */
   protected Artifact bitcodeSymbol(String arch, CompilationMode mode) throws Exception {
     SpawnAction lipoAction = (SpawnAction) lipoBinAction("//examples/apple_starlark:bin");
@@ -390,7 +381,6 @@ public class AppleBinaryStarlarkApiTest extends ObjcRuleTestCase {
   }
 
   @Test
-  @SuppressWarnings("unchecked")
   public void testProvider_executable() throws Exception {
     scratch.file("examples/rule/BUILD");
     scratch.file(
@@ -402,7 +392,6 @@ public class AppleBinaryStarlarkApiTest extends ObjcRuleTestCase {
         "   return MyInfo(",
         "      binary = provider.binary,",
         "      objc = provider.objc,",
-        "      dep_dir = dir(dep),",
         "   )",
         "test_rule = rule(implementation = _test_rule_impl,",
         "   attrs = {",
@@ -435,10 +424,6 @@ public class AppleBinaryStarlarkApiTest extends ObjcRuleTestCase {
 
     assertThat(myInfo.getValue("binary")).isInstanceOf(Artifact.class);
     assertThat(myInfo.getValue("objc")).isInstanceOf(ObjcProvider.class);
-
-    List<String> depProviders = (List<String>) myInfo.getValue("dep_dir");
-    assertThat(depProviders).doesNotContain("AppleDylibBinary");
-    assertThat(depProviders).doesNotContain("AppleLoadableBundleBinary");
   }
 
   @Test
@@ -906,6 +891,16 @@ public class AppleBinaryStarlarkApiTest extends ObjcRuleTestCase {
   @Test
   public void testAvoidDepsObjects() throws Exception {
     checkAvoidDepsObjects(getRuleType());
+  }
+
+  @Test
+  public void testAvoidDepsObjcLibraries() throws Exception {
+    checkAvoidDepsObjcLibraries(getRuleType());
+  }
+
+  @Test
+  public void testAvoidDepsObjcLibrariesAvoidViaCcLibrary() throws Exception {
+    checkAvoidDepsObjcLibrariesAvoidViaCcLibrary(getRuleType());
   }
 
   @Test

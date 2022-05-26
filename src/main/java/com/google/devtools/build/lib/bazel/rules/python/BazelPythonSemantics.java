@@ -20,6 +20,7 @@ import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.CommandLineItem;
 import com.google.devtools.build.lib.actions.ParamFileInfo;
 import com.google.devtools.build.lib.actions.ParameterFile;
 import com.google.devtools.build.lib.analysis.AnalysisUtils;
@@ -75,7 +76,7 @@ public class BazelPythonSemantics implements PythonSemantics {
   @Override
   public String getSrcsVersionDocURL() {
     // TODO(#8996): Update URL to point to rules_python's docs instead of the Bazel site.
-    return "https://docs.bazel.build/versions/main/be/python.html#py_binary.srcs_version";
+    return "https://bazel.build/reference/be/python#py_binary.srcs_version";
   }
 
   @Override
@@ -367,12 +368,24 @@ public class BazelPythonSemantics implements PythonSemantics {
 
     // Read each runfile from execute path, add them into zip file at the right runfiles path.
     // Filter the executable file, cause we are building it.
+    argv.addAll(
+        CustomCommandLine.VectorArg.of(runfilesSupport.getRunfilesArtifacts())
+            .mapped(
+                (CommandLineItem.CapturingMapFn<Artifact>)
+                    (artifact, args) -> {
+                      if (!artifact.equals(executable) && !artifact.equals(zipFile)) {
+                        args.accept(
+                            getZipRunfilesPath(
+                                    artifact.getRunfilesPath(),
+                                    workspaceName,
+                                    legacyExternalRunfiles)
+                                + "="
+                                + artifact.getExecPathString());
+                      }
+                    }));
+
     for (Artifact artifact : runfilesSupport.getRunfilesArtifacts().toList()) {
       if (!artifact.equals(executable) && !artifact.equals(zipFile)) {
-        argv.addDynamicString(
-            getZipRunfilesPath(artifact.getRunfilesPath(), workspaceName, legacyExternalRunfiles)
-                + "="
-                + artifact.getExecPathString());
         inputsBuilder.add(artifact);
       }
     }
@@ -460,7 +473,8 @@ public class BazelPythonSemantics implements PythonSemantics {
   }
 
   @Override
-  public CcInfo buildCcInfoProvider(Iterable<? extends TransitiveInfoCollection> deps) {
+  public CcInfo buildCcInfoProvider(
+      RuleContext ruleContext, Iterable<? extends TransitiveInfoCollection> deps) {
     ImmutableList<CcInfo> ccInfos =
         ImmutableList.<CcInfo>builder()
             .addAll(AnalysisUtils.getProviders(deps, CcInfo.PROVIDER))

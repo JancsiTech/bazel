@@ -84,20 +84,12 @@ class WorkerParser {
     ImmutableMap<String, String> env =
         localEnvProvider.rewriteLocalEnv(spawn.getEnvironment(), binTools, "/tmp");
 
-    SortedMap<PathFragment, HashCode> workerFiles =
-        WorkerFilesHash.getWorkerFilesWithHashes(
+    SortedMap<PathFragment, byte[]> workerFiles =
+        WorkerFilesHash.getWorkerFilesWithDigests(
             spawn, context.getArtifactExpander(), context.getMetadataProvider());
 
     HashCode workerFilesCombinedHash = WorkerFilesHash.getCombinedHash(workerFiles);
 
-    WorkerProtocolFormat protocolFormat = Spawns.getWorkerProtocolFormat(spawn);
-    if (!workerOptions.experimentalJsonWorkerProtocol) {
-      if (protocolFormat == WorkerProtocolFormat.JSON) {
-        throw new IOException(
-            "Persistent worker protocol format must be set to proto unless"
-                + " --experimental_worker_allow_json_protocol is used");
-      }
-    }
     WorkerKey key =
         createWorkerKey(
             spawn,
@@ -108,7 +100,7 @@ class WorkerParser {
             workerFiles,
             workerOptions,
             context.speculating(),
-            protocolFormat);
+            Spawns.getWorkerProtocolFormat(spawn));
     return new WorkerConfig(key, flagFiles);
   }
 
@@ -123,7 +115,7 @@ class WorkerParser {
       ImmutableMap<String, String> env,
       Path execRoot,
       HashCode workerFilesCombinedHash,
-      SortedMap<PathFragment, HashCode> workerFiles,
+      SortedMap<PathFragment, byte[]> workerFiles,
       WorkerOptions options,
       boolean dynamic,
       WorkerProtocolFormat protocolFormat) {

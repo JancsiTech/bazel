@@ -508,7 +508,7 @@ public class CppLinkActionBuilder {
       }
     }
 
-    return sharedNonLtoBackends.build();
+    return sharedNonLtoBackends.buildOrThrow();
   }
 
   @VisibleForTesting
@@ -760,7 +760,7 @@ public class CppLinkActionBuilder {
             .build();
 
     PathFragment paramRootPath =
-        ParameterFile.derivePath(outputRootPath, (isLtoIndexing) ? "lto-index" : "2");
+        ParameterFile.derivePath(outputRootPath,  isLtoIndexing ? "lto-index" : "2");
 
     @Nullable
     final Artifact paramFile =
@@ -820,7 +820,10 @@ public class CppLinkActionBuilder {
               getLinkType().linkerOrArchiver().equals(LinkerOrArchiver.LINKER),
               configuration.getBinDirectory(repositoryName).getExecPath(),
               output.getExecPathString(),
-              output.getRootRelativePath().getBaseName(),
+              SolibSymlinkAction.getDynamicLibrarySoname(
+                  output.getRootRelativePath(),
+                  /* preserveName= */ false,
+                  actionConstructionContext.getConfiguration().getMnemonic()),
               linkType.equals(LinkTargetType.DYNAMIC_LIBRARY),
               paramFile != null ? paramFile.getExecPathString() : null,
               thinltoParamFile != null ? thinltoParamFile.getExecPathString() : null,
@@ -1139,7 +1142,7 @@ public class CppLinkActionBuilder {
           linkArtifactFactory.create(
               actionConstructionContext, repositoryName, configuration, stampOutputPath));
     }
-    return mapBuilder.build();
+    return mapBuilder.buildOrThrow();
   }
 
   protected ActionOwner getOwner() {

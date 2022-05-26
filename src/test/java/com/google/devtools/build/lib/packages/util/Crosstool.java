@@ -502,6 +502,7 @@ public final class Crosstool {
                   "  ar_files = 'ar-" + toolchain.getTargetCpu() + "',",
                   "  as_files = 'as-" + toolchain.getTargetCpu() + "',",
                   "  compiler_files = 'compile-" + toolchain.getTargetCpu() + "',",
+                  "  coverage_files = 'coverage-file',",
                   "  dwp_files = 'dwp-" + toolchain.getTargetCpu() + "',",
                   "  linker_files = 'link-" + toolchain.getTargetCpu() + "',",
                   "  strip_files = ':every-file',",
@@ -531,6 +532,7 @@ public final class Crosstool {
                     + "//third_party/cc_rules/macros:defs.bzl', 'cc_library', 'cc_toolchain',"
                     + " 'cc_toolchain_suite')",
                 "toolchain_type(name = 'toolchain_type')",
+                "toolchain_type(name = 'test_runner_toolchain_type')",
                 "cc_toolchain_alias(name = 'current_cc_toolchain')",
                 "alias(name = 'toolchain', actual = 'everything')",
                 "filegroup(name = 'everything-multilib',",
@@ -641,6 +643,7 @@ public final class Crosstool {
           "    ar_files = ':link',",
           "    as_files = ':empty',",
           "    compiler_files = ':empty',",
+          "    coverage_files = 'coverage-file',",
           "    dwp_files = ':empty',",
           "    linker_files = ':link',",
           "    objcopy_files = ':empty',",

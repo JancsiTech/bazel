@@ -21,7 +21,6 @@ objc_internal = _builtins.internal.objc_internal
 cc_common = _builtins.toplevel.cc_common
 
 def _build_variable_extensions(
-        common_variables,
         ctx,
         intermediate_artifacts,
         variable_categories,
@@ -85,7 +84,6 @@ def _build_common_variables(
         compilation_artifacts = objc_internal.create_compilation_artifacts(ctx = ctx)
 
     (objc_provider, objc_compilation_context) = objc_common.create_context_and_provider(
-        purpose = "COMPILE_AND_LINK",
         ctx = ctx,
         compilation_attributes = compilation_attributes,
         compilation_artifacts = compilation_artifacts,
@@ -109,7 +107,6 @@ def _build_common_variables(
         disable_layering_check = disable_layering_check,
         disable_parse_headers = disable_parse_hdrs,
         objc_config = ctx.fragments.objc,
-        apple_config = ctx.fragments.apple,
         objc_provider = objc_provider,
     )
 
@@ -294,7 +291,6 @@ def _register_compile_and_archive_actions_for_j2objc(
         disable_layering_check = True,
         disable_parse_headers = True,
         objc_config = ctx.fragments.objc,
-        apple_config = ctx.fragments.apple,
         objc_provider = None,
     )
     return _register_compile_and_archive_actions(
@@ -385,7 +381,6 @@ def _cc_compile_and_link(
     purpose = "{}_objc_arc".format(_get_purpose(common_variables))
     arc_primary_module_map_fc = feature_configuration
     arc_extensions = _build_variable_extensions(
-        common_variables,
         ctx,
         intermediate_artifacts,
         variable_categories,
@@ -413,7 +408,6 @@ def _cc_compile_and_link(
         support_parse_headers = False,
     )
     non_arc_extensions = _build_variable_extensions(
-        common_variables,
         ctx,
         intermediate_artifacts,
         variable_categories,
@@ -482,19 +476,20 @@ def _cc_compile_and_link(
     if hasattr(common_variables.ctx.attr, "deps"):
         linking_contexts = cc_helper.get_linking_contexts_from_deps(common_variables.ctx.attr.deps)
 
-    cc_common.create_linking_context_from_compilation_outputs(
-        actions = ctx.actions,
-        feature_configuration = feature_configuration,
-        cc_toolchain = common_variables.toolchain,
-        compilation_outputs = compilation_outputs,
-        linking_contexts = linking_contexts,
-        name = common_variables.ctx.label.name + intermediate_artifacts.archive_file_name_suffix,
-        language = language,
-        disallow_dynamic_library = True,
-        additional_inputs = additional_inputs,
-        grep_includes = _get_grep_includes(ctx),
-        variables_extension = non_arc_extensions,
-    )
+    if len(compilation_outputs.objects) != 0 or len(compilation_outputs.pic_objects) != 0:
+        cc_common.create_linking_context_from_compilation_outputs(
+            actions = ctx.actions,
+            feature_configuration = feature_configuration,
+            cc_toolchain = common_variables.toolchain,
+            compilation_outputs = compilation_outputs,
+            linking_contexts = linking_contexts,
+            name = common_variables.ctx.label.name + intermediate_artifacts.archive_file_name_suffix,
+            language = language,
+            disallow_dynamic_library = True,
+            additional_inputs = additional_inputs,
+            grep_includes = _get_grep_includes(ctx),
+            variables_extension = non_arc_extensions,
+        )
 
     arc_output_groups = cc_helper.build_output_groups_for_emitting_compile_providers(
         arc_compilation_outputs,
@@ -588,7 +583,6 @@ def _register_fully_link_action(common_variables, objc_provider, name):
 
     output_archive = ctx.actions.declare_file(name + ".a")
     extensions = _build_variable_extensions(
-        common_variables,
         ctx,
         common_variables.intermediate_artifacts,
         ["FULLY_LINK_VARIABLES"],

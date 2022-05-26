@@ -20,12 +20,12 @@ import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.bazel.bzlmod.BzlmodTestUtil.createModuleKey;
 
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.hash.HashFunction;
-import com.google.devtools.build.lib.actions.FileStateValue;
 import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.actions.ThreadStateReceiver;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
@@ -42,6 +42,7 @@ import com.google.devtools.build.lib.bazel.repository.RepositoryOptions.CheckDir
 import com.google.devtools.build.lib.bazel.repository.downloader.DownloadManager;
 import com.google.devtools.build.lib.bazel.repository.starlark.StarlarkRepositoryFunction;
 import com.google.devtools.build.lib.bazel.repository.starlark.StarlarkRepositoryModule;
+import com.google.devtools.build.lib.clock.BlazeClock;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.StoredEventHandler;
 import com.google.devtools.build.lib.packages.PackageFactory;
@@ -64,6 +65,7 @@ import com.google.devtools.build.lib.skyframe.IgnoredPackagePrefixesFunction;
 import com.google.devtools.build.lib.skyframe.LocalRepositoryLookupFunction;
 import com.google.devtools.build.lib.skyframe.ManagedDirectoriesKnowledge;
 import com.google.devtools.build.lib.skyframe.PackageFunction;
+import com.google.devtools.build.lib.skyframe.PackageFunction.GlobbingStrategy;
 import com.google.devtools.build.lib.skyframe.PackageLookupFunction;
 import com.google.devtools.build.lib.skyframe.PackageLookupFunction.CrossRepositoryLabelViolationStrategy;
 import com.google.devtools.build.lib.skyframe.PrecomputedFunction;
@@ -76,10 +78,11 @@ import com.google.devtools.build.lib.testutil.ManualClock;
 import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
+import com.google.devtools.build.lib.vfs.FileStateKey;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Root;
-import com.google.devtools.build.lib.vfs.UnixGlob;
+import com.google.devtools.build.lib.vfs.SyscallCache;
 import com.google.devtools.build.skyframe.EvaluationContext;
 import com.google.devtools.build.skyframe.EvaluationResult;
 import com.google.devtools.build.skyframe.InMemoryMemoizingEvaluator;
@@ -175,12 +178,13 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
         new InMemoryMemoizingEvaluator(
             ImmutableMap.<SkyFunctionName, SkyFunction>builder()
                 .put(
-                    FileStateValue.FILE_STATE,
+                    FileStateKey.FILE_STATE,
                     new FileStateFunction(
-                        new AtomicReference<>(),
-                        new AtomicReference<>(UnixGlob.DEFAULT_SYSCALLS),
+                        Suppliers.ofInstance(
+                            new TimestampGranularityMonitor(BlazeClock.instance())),
+                        SyscallCache.NO_CACHE,
                         externalFilesHelper))
-                .put(FileValue.FILE, new FileFunction(pkgLocator))
+                .put(FileValue.FILE, new FileFunction(pkgLocator, directories))
                 .put(SkyFunctions.REPOSITORY_DIRECTORY, delegatorFunction)
                 .put(
                     SkyFunctions.PACKAGE,
@@ -193,7 +197,7 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
                         /*packageProgress=*/ null,
                         PackageFunction.ActionOnIOExceptionReadingBuildFile.UseOriginalIOException
                             .INSTANCE,
-                        PackageFunction.IncrementalityIntent.INCREMENTAL,
+                        GlobbingStrategy.SKYFRAME_HYBRID,
                         k -> ThreadStateReceiver.NULL_INSTANCE))
                 .put(
                     SkyFunctions.PACKAGE_LOOKUP,
@@ -229,7 +233,9 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
                     new IgnoredPackagePrefixesFunction(
                         /*ignoredPackagePrefixesFile=*/ PathFragment.EMPTY_FRAGMENT))
                 .put(SkyFunctions.RESOLVED_HASH_VALUES, new ResolvedHashesFunction())
-                .put(SkyFunctions.MODULE_FILE, new ModuleFileFunction(registryFactory, rootPath))
+                .put(
+                    SkyFunctions.MODULE_FILE,
+                    new ModuleFileFunction(registryFactory, rootPath, ImmutableMap.of()))
                 .put(SkyFunctions.BAZEL_MODULE_RESOLUTION, new BazelModuleResolutionFunction())
                 .put(
                     SkyFunctions.MODULE_EXTENSION_RESOLUTION,
@@ -270,11 +276,10 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
   public void testOverride() throws Exception {
     RepositoryDelegatorFunction.REPOSITORY_OVERRIDES.set(
         differencer,
-        ImmutableMap.of(
-            RepositoryName.createFromValidStrippedName("foo"), overrideDirectory.asFragment()));
+        ImmutableMap.of(RepositoryName.createUnvalidated("foo"), overrideDirectory.asFragment()));
 
     StoredEventHandler eventHandler = new StoredEventHandler();
-    SkyKey key = RepositoryDirectoryValue.key(RepositoryName.createFromValidStrippedName("foo"));
+    SkyKey key = RepositoryDirectoryValue.key(RepositoryName.createUnvalidated("foo"));
     EvaluationContext evaluationContext =
         EvaluationContext.newBuilder()
             .setKeepGoing(false)
@@ -299,7 +304,7 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
 
     RepositoryDirectoryDirtinessChecker checker =
         new RepositoryDirectoryDirtinessChecker(rootPath, knowledge);
-    RepositoryName repositoryName = RepositoryName.create("@repo");
+    RepositoryName repositoryName = RepositoryName.create("repo");
     RepositoryDirectoryValue.Key key = RepositoryDirectoryValue.key(repositoryName);
 
     SuccessfulRepositoryDirectoryValue usual =
@@ -308,7 +313,7 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
             .setDigest(new byte[] {1})
             .build();
 
-    assertThat(checker.check(key, usual, tsgm).isDirty()).isFalse();
+    assertThat(checker.check(key, usual, SyscallCache.NO_CACHE, tsgm).isDirty()).isFalse();
 
     SuccessfulRepositoryDirectoryValue fetchDelayed =
         RepositoryDirectoryValue.builder()
@@ -317,9 +322,9 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
             .setDigest(new byte[] {1})
             .build();
 
-    assertThat(checker.check(key, fetchDelayed, tsgm).isDirty()).isTrue();
+    assertThat(checker.check(key, fetchDelayed, SyscallCache.NO_CACHE, tsgm).isDirty()).isTrue();
 
-    RepositoryName managedName = RepositoryName.create("@managed");
+    RepositoryName managedName = RepositoryName.create("managed");
     RepositoryDirectoryValue.Key managedKey = RepositoryDirectoryValue.key(managedName);
     SuccessfulRepositoryDirectoryValue withManagedDirectories =
         RepositoryDirectoryValue.builder()
@@ -328,15 +333,27 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
             .build();
 
     knowledge.setManagedDirectories(ImmutableMap.of(PathFragment.create("m"), managedName));
-    assertThat(checker.check(managedKey, withManagedDirectories, tsgm).isDirty()).isTrue();
+    assertThat(
+            checker
+                .check(managedKey, withManagedDirectories, SyscallCache.NO_CACHE, tsgm)
+                .isDirty())
+        .isTrue();
 
     Path managedDirectoryM = rootPath.getRelative("m");
     assertThat(managedDirectoryM.createDirectory()).isTrue();
 
-    assertThat(checker.check(managedKey, withManagedDirectories, tsgm).isDirty()).isFalse();
+    assertThat(
+            checker
+                .check(managedKey, withManagedDirectories, SyscallCache.NO_CACHE, tsgm)
+                .isDirty())
+        .isFalse();
 
     managedDirectoryM.deleteTree();
-    assertThat(checker.check(managedKey, withManagedDirectories, tsgm).isDirty()).isTrue();
+    assertThat(
+            checker
+                .check(managedKey, withManagedDirectories, SyscallCache.NO_CACHE, tsgm)
+                .isDirty())
+        .isTrue();
   }
 
   @Test
@@ -358,7 +375,7 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
     // That's why we will directly fill managed directories value (the corresponding structure
     // is passed to RepositoryDelegatorFunction during construction).
     managedDirectoriesKnowledge.setManagedDirectories(
-        ImmutableMap.of(PathFragment.create("dir1"), RepositoryName.create("@repo1")));
+        ImmutableMap.of(PathFragment.create("dir1"), RepositoryName.create("repo1")));
 
     loadRepo("repo1");
 
@@ -386,9 +403,9 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
     managedDirectoriesKnowledge.setManagedDirectories(
         ImmutableMap.of(
             PathFragment.create("dir1"),
-            RepositoryName.create("@repo1"),
+            RepositoryName.create("repo1"),
             PathFragment.create("dir2"),
-            RepositoryName.create("@repo1")));
+            RepositoryName.create("repo1")));
     loadRepo("repo1");
 
     assertThat(testStarlarkRepositoryFunction.isFetchCalled()).isTrue();
@@ -428,7 +445,7 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
         "broken_repo(name = 'broken')");
 
     StoredEventHandler eventHandler = new StoredEventHandler();
-    SkyKey key = RepositoryDirectoryValue.key(RepositoryName.createFromValidStrippedName("broken"));
+    SkyKey key = RepositoryDirectoryValue.key(RepositoryName.createUnvalidated("broken"));
     // Make it be evaluated every time, as we are testing evaluation.
     differencer.invalidate(ImmutableSet.of(key));
     EvaluationContext evaluationContext =
@@ -453,7 +470,7 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
     scratch.overwriteFile(rootPath.getRelative("WORKSPACE").getPathString(), "");
 
     StoredEventHandler eventHandler = new StoredEventHandler();
-    SkyKey key = RepositoryDirectoryValue.key(RepositoryName.createFromValidStrippedName("foo"));
+    SkyKey key = RepositoryDirectoryValue.key(RepositoryName.createUnvalidated("foo"));
     // Make it be evaluated every time, as we are testing evaluation.
     differencer.invalidate(ImmutableSet.of(key));
     EvaluationContext evaluationContext =
@@ -499,7 +516,7 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
         "fictive_repo_rule(name = 'B.1.0')");
 
     StoredEventHandler eventHandler = new StoredEventHandler();
-    SkyKey key = RepositoryDirectoryValue.key(RepositoryName.createFromValidStrippedName("B.1.0"));
+    SkyKey key = RepositoryDirectoryValue.key(RepositoryName.createUnvalidated("B.1.0"));
     EvaluationContext evaluationContext =
         EvaluationContext.newBuilder()
             .setKeepGoing(false)
@@ -527,7 +544,7 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
     StoredEventHandler eventHandler = new StoredEventHandler();
     SkyKey key =
         RepositoryDirectoryValue.key(
-            RepositoryName.createFromValidStrippedName("foo").toNonVisible("fake_owner_repo"));
+            RepositoryName.createUnvalidated("foo").toNonVisible("fake_owner_repo"));
     EvaluationContext evaluationContext =
         EvaluationContext.newBuilder()
             .setKeepGoing(false)
@@ -546,8 +563,7 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
 
   private void loadRepo(String strippedRepoName) throws InterruptedException {
     StoredEventHandler eventHandler = new StoredEventHandler();
-    SkyKey key =
-        RepositoryDirectoryValue.key(RepositoryName.createFromValidStrippedName(strippedRepoName));
+    SkyKey key = RepositoryDirectoryValue.key(RepositoryName.createUnvalidated(strippedRepoName));
     // Make it be evaluated every time, as we are testing evaluation.
     differencer.invalidate(ImmutableSet.of(key));
     EvaluationContext evaluationContext =

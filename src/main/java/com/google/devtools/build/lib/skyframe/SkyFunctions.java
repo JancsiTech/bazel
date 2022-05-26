@@ -99,8 +99,6 @@ public final class SkyFunctions {
       SkyFunctionName.createSemiHermetic("ACTION_EXECUTION");
   public static final SkyFunctionName ARTIFACT_NESTED_SET =
       SkyFunctionName.createHermetic("ARTIFACT_NESTED_SET");
-  public static final SkyFunctionName PATH_CASING_LOOKUP =
-      SkyFunctionName.createHermetic("PATH_CASING_LOOKUP");
   static final SkyFunctionName RECURSIVE_FILESYSTEM_TRAVERSAL =
       SkyFunctionName.createHermetic("RECURSIVE_DIRECTORY_TRAVERSAL");
   public static final SkyFunctionName FILESET_ENTRY =
@@ -143,6 +141,8 @@ public final class SkyFunctions {
       SkyFunctionName.createNonHermetic("BUILD_DRIVER");
   public static final SkyFunctionName BAZEL_MODULE_RESOLUTION =
       SkyFunctionName.createHermetic("BAZEL_MODULE_RESOLUTION");
+  public static final SkyFunctionName BAZEL_MODULE_INSPECTION =
+      SkyFunctionName.createHermetic("BAZEL_MODULE_INSPECTION");
   public static final SkyFunctionName MODULE_EXTENSION_RESOLUTION =
       SkyFunctionName.createHermetic("MODULE_EXTENSION_RESOLUTION");
   public static final SkyFunctionName SINGLE_EXTENSION_USAGES =

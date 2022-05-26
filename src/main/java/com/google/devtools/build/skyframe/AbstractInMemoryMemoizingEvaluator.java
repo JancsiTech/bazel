@@ -18,9 +18,11 @@ import com.google.devtools.build.lib.util.GroupedList;
 import com.google.devtools.build.skyframe.QueryableGraph.Reason;
 import com.google.errorprone.annotations.ForOverride;
 import java.io.PrintStream;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 import javax.annotation.Nullable;
 
@@ -83,12 +85,25 @@ public abstract class AbstractInMemoryMemoizingEvaluator implements MemoizingEva
     long edges = 0;
     for (InMemoryNodeEntry entry : inMemoryGraph().getAllValues().values()) {
       nodes++;
-      if (entry.isDone()) {
+      if (entry.isDone() && entry.keepEdges() != NodeEntry.KeepEdgesPolicy.NONE) {
         edges += Iterables.size(entry.getDirectDeps());
       }
     }
     out.println("Node count: " + nodes);
     out.println("Edge count: " + edges);
+  }
+
+  @Override
+  public final void dumpCount(PrintStream out) {
+    Map<String, AtomicInteger> counter = new HashMap<>();
+    for (SkyKey key : inMemoryGraph().getAllValues().keySet()) {
+      String mapKey = key.functionName().getName();
+      counter.putIfAbsent(mapKey, new AtomicInteger());
+      counter.get(mapKey).incrementAndGet();
+    }
+    for (Entry<String, AtomicInteger> entry : counter.entrySet()) {
+      out.println(entry.getKey() + "\t" + entry.getValue()); // \t is spreadsheet-friendly.
+    }
   }
 
   @Override

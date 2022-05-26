@@ -24,6 +24,7 @@ import com.google.common.collect.Maps;
 import com.google.common.flogger.GoogleLogger;
 import com.google.common.hash.HashFunction;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
+import com.google.devtools.build.lib.cmdline.BazelModuleContext;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelConstants;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
@@ -37,13 +38,13 @@ import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.events.ExtendedEventHandler.Postable;
 import com.google.devtools.build.lib.events.StoredEventHandler;
 import com.google.devtools.build.lib.io.InconsistentFilesystemException;
-import com.google.devtools.build.lib.packages.BazelModuleContext;
 import com.google.devtools.build.lib.packages.BazelStarlarkEnvironment;
 import com.google.devtools.build.lib.packages.BuildFileNotFoundException;
 import com.google.devtools.build.lib.packages.PackageFactory;
 import com.google.devtools.build.lib.packages.StarlarkExportable;
 import com.google.devtools.build.lib.packages.WorkspaceFileValue;
 import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
+import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunction;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.server.FailureDetails.StarlarkLoading;
 import com.google.devtools.build.lib.server.FailureDetails.StarlarkLoading.Code;
@@ -59,7 +60,7 @@ import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
-import com.google.devtools.build.skyframe.ValueOrException;
+import com.google.devtools.build.skyframe.SkyframeIterableResult;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -496,7 +497,9 @@ public class BzlLoadFunction implements SkyFunction {
       if (!loadStack.add(key)) {
         ImmutableList<BzlLoadValue.Key> cycle =
             CycleUtils.splitIntoPathAndChain(Predicates.equalTo(key), loadStack).second;
-        throw new BzlLoadFailedException("Starlark load cycle: " + cycle, Code.CYCLE);
+        throw new BzlLoadFailedException(
+            "Starlark load cycle: " + Lists.transform(cycle, BzlLoadValue.Key::getLabel),
+            Code.CYCLE);
       }
     }
 
@@ -804,12 +807,14 @@ public class BzlLoadFunction implements SkyFunction {
 
   private static RepositoryMapping getRepositoryMapping(BzlLoadValue.Key key, Environment env)
       throws InterruptedException {
-    if (key.isBuiltins()) {
-      // Builtins .bzls never have a repo mapping defined for them, so return without requesting a
-      // RepositoryMappingValue. (NB: In addition to being a slight optimization, this avoids
-      // adding a reverse dependency on the special //external package, which helps avoid tickling
-      // some peculiarities of the Google-internal Skyframe implementation; see b/182293526 for
-      // details.)
+    if (key.isBuiltins() && !RepositoryDelegatorFunction.ENABLE_BZLMOD.get(env)) {
+      // Without Bzlmod, builtins .bzls never have a repo mapping defined for them, so return
+      // without requesting a RepositoryMappingValue. (NB: In addition to being a slight
+      // optimization, this avoids adding a reverse dependency on the special //external package,
+      // which helps avoid tickling some peculiarities of the Google-internal Skyframe
+      // implementation; see b/182293526 for details.)
+      // Otherwise, builtins .bzls should use the repo mapping of @bazel_tools, and *do* request a
+      // normal RepositoryMappingValue (see logic in RepositoryMappingFunction).
       return RepositoryMapping.ALWAYS_FALLBACK;
     }
 
@@ -966,12 +971,11 @@ public class BzlLoadFunction implements SkyFunction {
       Environment env, List<BzlLoadValue.Key> keys, List<Pair<String, Location>> programLoads)
       throws BzlLoadFailedException, InterruptedException {
     List<BzlLoadValue> bzlLoads = Lists.newArrayListWithExpectedSize(keys.size());
-    Map<SkyKey, ValueOrException<BzlLoadFailedException>> values =
-        env.getValuesOrThrow(keys, BzlLoadFailedException.class);
+    SkyframeIterableResult values = env.getOrderedValuesAndExceptions(keys);
     // Process loads (and report first error) in source order.
     for (int i = 0; i < keys.size(); i++) {
       try {
-        bzlLoads.add((BzlLoadValue) values.get(keys.get(i)).get());
+        bzlLoads.add((BzlLoadValue) values.nextOrThrow(BzlLoadFailedException.class));
       } catch (BzlLoadFailedException ex) {
         throw BzlLoadFailedException.whileLoadingDep(programLoads.get(i).second, ex);
       }

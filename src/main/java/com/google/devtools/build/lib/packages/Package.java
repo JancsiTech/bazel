@@ -479,7 +479,7 @@ public class Package {
     }
     builder.externalPackageRepositoryMappings.forEach((k, v) ->
         repositoryMappingsBuilder.put(k, ImmutableMap.copyOf(v)));
-    this.externalPackageRepositoryMappings = repositoryMappingsBuilder.build();
+    this.externalPackageRepositoryMappings = repositoryMappingsBuilder.buildOrThrow();
   }
 
   private static boolean isWorkspaceFile(String baseFileName) {
@@ -668,7 +668,7 @@ public class Package {
     try {
       label = Label.create(packageIdentifier, targetName);
     } catch (LabelSyntaxException e) {
-      throw new IllegalArgumentException(targetName);
+      throw new IllegalArgumentException(targetName, e);
     }
 
     if (succinctTargetNotFoundErrors) {
@@ -1370,7 +1370,7 @@ public class Package {
       return null;
     }
 
-    Builder setStarlarkFileDependencies(ImmutableList<Label> starlarkFileDependencies) {
+    public Builder setStarlarkFileDependencies(ImmutableList<Label> starlarkFileDependencies) {
       this.starlarkFileDependencies = starlarkFileDependencies;
       return this;
     }
@@ -1509,7 +1509,13 @@ public class Package {
           "Replacement target belongs to package '%s', expected '%s'",
           newTarget.getPackage(),
           pkg);
-      targets.put(newTarget.getName(), newTarget);
+      Target oldTarget = targets.put(newTarget.getName(), newTarget);
+      if (newTarget instanceof Rule && ruleLabels != null) {
+        List<Label> ruleLabelsForOldTarget = ruleLabels.remove(oldTarget);
+        if (ruleLabelsForOldTarget != null) {
+          ruleLabels.put((Rule) newTarget, ruleLabelsForOldTarget);
+        }
+      }
     }
 
     public Set<Target> getTargets() {
@@ -1535,11 +1541,13 @@ public class Package {
     }
 
     /**
-     * Returns an (immutable, unordered) view of all the targets belonging to this package which are
-     * instances of the specified class.
+     * Returns an {@link Iterable} of all the rule instance targets belonging to this package.
+     *
+     * <p>The returned {@link Iterable} will be deterministically ordered, in the order the rule
+     * instance targets were instantiated.
      */
     private Iterable<Rule> getRules() {
-      return ruleLabels != null ? ruleLabels.keySet() : Package.getTargets(targets, Rule.class);
+      return Package.getTargets(targets, Rule.class);
     }
 
     /**
@@ -1569,8 +1577,8 @@ public class Package {
         try {
           return addInputFile(createLabel(targetName), location);
         } catch (LabelSyntaxException e) {
-          throw new IllegalArgumentException("FileTarget in package " + pkg.getName()
-                                             + " has illegal name: " + targetName);
+          throw new IllegalArgumentException(
+              "FileTarget in package " + pkg.getName() + " has illegal name: " + targetName, e);
         }
       } else if (existing instanceof InputFile) {
         return (InputFile) existing; // idempotent

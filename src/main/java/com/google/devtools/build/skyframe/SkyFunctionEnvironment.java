@@ -37,7 +37,6 @@ import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.skyframe.EvaluationProgressReceiver.EvaluationState;
 import com.google.devtools.build.skyframe.NodeEntry.DependencyState;
 import com.google.devtools.build.skyframe.QueryableGraph.Reason;
-import com.google.devtools.build.skyframe.SkyFunction.Environment.SkyKeyComputeState;
 import com.google.devtools.build.skyframe.proto.GraphInconsistency.Inconsistency;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -88,6 +87,8 @@ final class SkyFunctionEnvironment extends AbstractSkyFunctionEnvironment {
    */
   @Nullable private final Map<SkyKey, ValueWithMetadata> bubbleErrorInfo;
 
+  private boolean encounteredErrorDuringBubbling = false;
+
   /**
    * The values previously declared as dependencies.
    *
@@ -119,7 +120,7 @@ final class SkyFunctionEnvironment extends AbstractSkyFunctionEnvironment {
    * The grouped list of values requested during this build as dependencies. On a subsequent build,
    * if this value is dirty, all deps in the same dependency group can be checked in parallel for
    * changes. In other words, if dep1 and dep2 are in the same group, then dep1 will be checked in
-   * parallel with dep2. See {@link SkyFunction.Environment#getValues} for more.
+   * parallel with dep2. See {@link SkyFunction.Environment#getValuesAndExceptions} for more.
    */
   private final GroupedListHelper<SkyKey> newlyRequestedDeps = new GroupedListHelper<>();
 
@@ -206,7 +207,7 @@ final class SkyFunctionEnvironment extends AbstractSkyFunctionEnvironment {
     this.maxTransitiveSourceVersion =
         bubbleErrorInfo == null
                 && skyKey.functionName().getHermeticity() != FunctionHermeticity.NONHERMETIC
-            ? MinimalVersion.INSTANCE
+            ? evaluatorContext.getMinimalVersion()
             : null;
     this.previouslyRequestedDepsValues = batchPrefetch(throwIfPreviouslyRequestedDepsUndone);
     Preconditions.checkState(
@@ -612,6 +613,7 @@ final class SkyFunctionEnvironment extends AbstractSkyFunctionEnvironment {
         errorMightHaveBeenFound = true;
         childErrorInfos.add(errorInfo);
         if (bubbleErrorInfo != null) {
+          encounteredErrorDuringBubbling = true;
           // Set interrupted status, to try to prevent the calling SkyFunction from doing anything
           // fancy after this. SkyFunctions executed during error bubbling are supposed to
           // (quickly) rethrow errors or return a value/null (but there's currently no way to
@@ -660,6 +662,7 @@ final class SkyFunctionEnvironment extends AbstractSkyFunctionEnvironment {
         errorMightHaveBeenFound = true;
         childErrorInfos.add(errorInfo);
         if (bubbleErrorInfo != null) {
+          encounteredErrorDuringBubbling = true;
           // Set interrupted status, to try to prevent the calling SkyFunction from doing anything
           // fancy after this. SkyFunctions executed during error bubbling are supposed to
           // (quickly) rethrow errors or return a value/null (but there's currently no way to
@@ -804,8 +807,12 @@ final class SkyFunctionEnvironment extends AbstractSkyFunctionEnvironment {
               .getErrorInfoToUse(skyKey, value != null, childErrorInfos);
       // TODO(b/166268889, b/172223413): remove when fixed.
       if (errorInfo != null && errorInfo.getException() instanceof IOException) {
-        logger.atInfo().withCause(errorInfo.getException()).log(
-            "Synthetic errorInfo for %s", skyKey);
+        String skyFunctionName = skyKey.functionName().getName();
+        if (!skyFunctionName.startsWith("FILE")
+            && !skyFunctionName.startsWith("DIRECTORY_LISTING")) {
+          logger.atInfo().withCause(errorInfo.getException()).log(
+              "Synthetic errorInfo for %s", skyKey);
+        }
       }
     }
 
@@ -840,10 +847,6 @@ final class SkyFunctionEnvironment extends AbstractSkyFunctionEnvironment {
       }
     }
 
-    if (temporaryDirectDeps.isEmpty()
-        && skyKey.functionName().getHermeticity() != FunctionHermeticity.NONHERMETIC) {
-      maxTransitiveSourceVersion = null; // No dependencies on source.
-    }
     Preconditions.checkState(
         maxTransitiveSourceVersion == null || newlyRegisteredDeps.isEmpty(),
         "Dependency registration not supported when tracking max transitive source versions");
@@ -971,6 +974,10 @@ final class SkyFunctionEnvironment extends AbstractSkyFunctionEnvironment {
     return (T) evaluatorContext.stateCache().get(skyKey, k -> stateSupplier.get());
   }
 
+  boolean encounteredErrorDuringBubbling() {
+    return encounteredErrorDuringBubbling;
+  }
+
   /** Thrown during environment construction if previously requested deps are no longer done. */
   static class UndonePreviouslyRequestedDeps extends Exception {
     private final ImmutableList<SkyKey> depKeys;
@@ -982,5 +989,11 @@ final class SkyFunctionEnvironment extends AbstractSkyFunctionEnvironment {
     ImmutableList<SkyKey> getDepKeys() {
       return depKeys;
     }
+  }
+
+  @Override
+  @Nullable
+  public Version getMaxTransitiveSourceVersionSoFar() {
+    return maxTransitiveSourceVersion;
   }
 }

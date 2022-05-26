@@ -156,7 +156,7 @@ public abstract class AndroidBinaryTest extends AndroidBuildViewTestCase {
           ")",
           "config_setting(",
           "    name = 'is_arm',",
-          "    constraint_values = ['" + TestConstants.CONSTRAINTS_PACKAGE_ROOT + "cpu:arm'],",
+          "    constraint_values = ['" + TestConstants.CONSTRAINTS_PACKAGE_ROOT + "cpu:armv7'],",
           ")",
           "android_library(",
           "    name = 'lib',",
@@ -223,7 +223,7 @@ public abstract class AndroidBinaryTest extends AndroidBuildViewTestCase {
           "platform(",
           "    name = 'armeabi-v7a',",
           "    parents = ['" + TestConstants.PLATFORM_PACKAGE_ROOT + "/android:armeabi-v7a'],",
-          "    constraint_values = ['" + TestConstants.CONSTRAINTS_PACKAGE_ROOT + "cpu:arm'],",
+          "    constraint_values = ['" + TestConstants.CONSTRAINTS_PACKAGE_ROOT + "cpu:armv7'],",
           ")");
       scratch.file(
           "/workspace/platform_mappings",
@@ -239,7 +239,7 @@ public abstract class AndroidBinaryTest extends AndroidBuildViewTestCase {
           "flags:",
           "  --crosstool_top=//android/crosstool:everything",
           "  --cpu=armeabi-v7a",
-          "    //java/android/platforms:arm",
+          "    //java/android/platforms:armv7",
           "  --crosstool_top=//android/crosstool:everything",
           "  --cpu=x86",
           "    //java/android/platforms:x86");
@@ -803,6 +803,7 @@ public abstract class AndroidBinaryTest extends AndroidBuildViewTestCase {
 
   @Test
   public void testNativeLibrary_copiesLibrariesDespiteExtraLayersOfIndirection() throws Exception {
+    setBuildLanguageOptions("--experimental_builtins_injection_override=+cc_library");
     scratch.file(
         "java/android/app/BUILD",
         "cc_library(name = 'native_dep',",
@@ -2278,6 +2279,9 @@ public abstract class AndroidBinaryTest extends AndroidBuildViewTestCase {
     assertThat(deployInfo.getMergedManifest().getExecRootPath()).endsWith("/AndroidManifest.xml");
     assertThat(deployInfo.getAdditionalMergedManifestsList()).isEmpty();
     assertThat(deployInfo.getApksToDeploy(0).getExecRootPath()).endsWith("/app.apk");
+    Artifact mergedManifest =
+        ActionsTestUtil.getFirstArtifactEndingWith(outputGroup, "/AndroidManifest.xml");
+    assertThat(mergedManifest).isNotNull();
   }
 
   /**

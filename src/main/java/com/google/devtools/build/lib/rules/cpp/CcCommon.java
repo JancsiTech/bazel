@@ -204,6 +204,11 @@ public final class CcCommon implements StarlarkValue {
     return mergedOutputGroups;
   }
 
+  @StarlarkMethod(name = "copts", structField = true, documented = false)
+  public Sequence<String> getCoptsForStarlark() {
+    return StarlarkList.immutableCopyOf(getCopts());
+  }
+
   @StarlarkMethod(name = "linkopts", structField = true, documented = false)
   public Sequence<String> getLinkoptsForStarlark() {
     return StarlarkList.immutableCopyOf(getLinkopts());
@@ -225,11 +230,6 @@ public final class CcCommon implements StarlarkValue {
     return ImmutableList.copyOf(result);
   }
 
-  @StarlarkMethod(name = "copts", structField = true, documented = false)
-  public Sequence<String> getCoptsForStarlark() {
-    return StarlarkList.immutableCopyOf(getCopts());
-  }
-
   public ImmutableList<String> getCopts() {
     if (!getCoptsFilter(ruleContext).passesFilter("-Wno-future-warnings")) {
       ruleContext.attributeWarning(
@@ -246,6 +246,14 @@ public final class CcCommon implements StarlarkValue {
         .addAll(CppHelper.getPackageCopts(ruleContext))
         .addAll(CppHelper.getAttributeCopts(ruleContext))
         .build();
+  }
+
+  // TODO(gnish): Delete this method once package default copts are gone.
+  // All of the package default copts will be included in rule attribute
+  // after the migration.
+  @StarlarkMethod(name = "unexpanded_package_copts", structField = true, documented = false)
+  public Sequence<String> getUnexpandedPackageCoptsForStarlark() {
+    return StarlarkList.immutableCopyOf(ruleContext.getRule().getPackage().getDefaultCopts());
   }
 
   private boolean hasAttribute(String name, Type<?> type) {
@@ -348,8 +356,13 @@ public final class CcCommon implements StarlarkValue {
       FileProvider provider = target.getProvider(FileProvider.class);
       for (Artifact artifact : provider.getFilesToBuild().toList()) {
         if (CppRuleClasses.DISALLOWED_HDRS_FILES.matches(artifact.getFilename())) {
-          ruleContext.attributeWarning("hdrs", "file '" + artifact.getFilename()
-              + "' from target '" + target.getLabel() + "' is not allowed in hdrs");
+          ruleContext.attributeWarning(
+              "hdrs",
+              "file '"
+                  + artifact.getFilename()
+                  + "' from target '"
+                  + target.getLabel()
+                  + "' is not allowed in hdrs");
           continue;
         }
         Label oldLabel = map.put(artifact, target.getLabel());
@@ -358,9 +371,7 @@ public final class CcCommon implements StarlarkValue {
               "hdrs",
               String.format(
                   "Artifact '%s' is duplicated (through '%s' and '%s')",
-                  artifact.getExecPathString(),
-                  oldLabel,
-                  target.getLabel()));
+                  artifact.getExecPathString(), oldLabel, target.getLabel()));
         }
       }
     }
@@ -372,6 +383,14 @@ public final class CcCommon implements StarlarkValue {
     return result.build();
   }
 
+  /**
+   * Returns the files from headers and does some checks. Note that this method reports warnings to
+   * the {@link RuleContext} as a side effect, and so should only be called once for any given rule.
+   */
+  public List<Pair<Artifact, Label>> getHeaders() {
+    return getHeaders(ruleContext);
+  }
+
   /** Returns the C++ toolchain provider. */
   @StarlarkMethod(name = "toolchain", documented = false, structField = true)
   public CcToolchainProvider getToolchain() {
@@ -381,14 +400,6 @@ public final class CcCommon implements StarlarkValue {
   /** Returns the C++ FDO optimization support provider. */
   public FdoContext getFdoContext() {
     return fdoContext;
-  }
-
-  /**
-   * Returns the files from headers and does some checks. Note that this method reports warnings to
-   * the {@link RuleContext} as a side effect, and so should only be called once for any given rule.
-   */
-  public List<Pair<Artifact, Label>> getHeaders() {
-    return getHeaders(ruleContext);
   }
 
   @StarlarkMethod(
@@ -580,18 +591,29 @@ public final class CcCommon implements StarlarkValue {
     List<String> defines = new ArrayList<>();
 
     // collect labels that can be subsituted in defines
-    ImmutableMap.Builder<Label, ImmutableCollection<Artifact>> builder = ImmutableMap.builder();
+    Map<Label, ImmutableCollection<Artifact>> map = Maps.newLinkedHashMap();
 
     if (ruleContext.attributes().has("deps", LABEL_LIST)) {
       for (TransitiveInfoCollection current : ruleContext.getPrerequisites("deps")) {
-        builder.put(
+        map.put(
             AliasProvider.getDependencyLabel(current),
             current.getProvider(FileProvider.class).getFilesToBuild().toList());
       }
     }
 
+    if (ruleContext.attributes().has("data", LABEL_LIST)) {
+      for (TransitiveInfoCollection current : ruleContext.getPrerequisites("data")) {
+        Label dataDependencyLabel = AliasProvider.getDependencyLabel(current);
+        if (!map.containsKey(dataDependencyLabel)) {
+          map.put(
+              dataDependencyLabel,
+              current.getProvider(FileProvider.class).getFilesToBuild().toList());
+        }
+      }
+    }
     // tokenize defines and substitute make variables
-    for (String define : ruleContext.getExpander().withExecLocations(builder.build()).list(attr)) {
+    for (String define :
+        ruleContext.getExpander().withExecLocations(ImmutableMap.copyOf(map)).list(attr)) {
       List<String> tokens = new ArrayList<>();
       try {
         ShellUtils.tokenize(tokens, define);
@@ -1060,6 +1082,10 @@ public final class CcCommon implements StarlarkValue {
         if (!allUnsupportedFeatures.contains(CppRuleClasses.THIN_LTO)) {
           allFeatures.add(CppRuleClasses.ENABLE_AFDO_THINLTO);
         }
+        // Support implicit enabling of FSAFDO for AFDO unless it has been disabled.
+        if (!allUnsupportedFeatures.contains(CppRuleClasses.FSAFDO)) {
+          allFeatures.add(CppRuleClasses.ENABLE_FSAFDO);
+        }
       }
       if (branchFdoProvider.isAutoXBinaryFdo()) {
         allFeatures.add(CppRuleClasses.XBINARYFDO);
@@ -1159,6 +1185,19 @@ public final class CcCommon implements StarlarkValue {
     return sysrootFlag;
   }
 
+  @StarlarkMethod(
+      name = "compute_cc_flags_from_feature_config",
+      documented = false,
+      parameters = {
+        @Param(name = "ctx", positional = false, named = true),
+        @Param(name = "cc_toolchain", positional = false, named = true)
+      })
+  public List<String> computeCcFlagsFromFeatureConfigForStarlark(
+      StarlarkRuleContext starlarkRuleContext, CcToolchainProvider ccToolchain)
+      throws RuleErrorException {
+    return computeCcFlagsFromFeatureConfig(starlarkRuleContext.getRuleContext(), ccToolchain);
+  }
+
   private static List<String> computeCcFlagsFromFeatureConfig(
       RuleContext ruleContext, CcToolchainProvider toolchainProvider) throws RuleErrorException {
     FeatureConfiguration featureConfiguration = null;
@@ -1225,7 +1264,7 @@ public final class CcCommon implements StarlarkValue {
               .add(requestedFeaturesFile)
               .build());
     }
-    return outputGroupsBuilder.build();
+    return outputGroupsBuilder.buildOrThrow();
   }
 
   public static boolean isOldStarlarkApiWhiteListed(
@@ -1235,7 +1274,7 @@ public final class CcCommon implements StarlarkValue {
 
     RuleClass ruleClass = rule.getRuleClassObject();
     Label label = ruleClass.getRuleDefinitionEnvironmentLabel();
-    if (label.getRepository().getName().equals("@_builtins")) {
+    if (label.getRepository().getNameWithAt().equals("@_builtins")) {
       // always permit builtins
       return true;
     }

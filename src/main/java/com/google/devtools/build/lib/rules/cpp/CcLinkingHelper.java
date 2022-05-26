@@ -651,6 +651,7 @@ public final class CcLinkingHelper {
     Artifact linkedArtifact = getLinkedArtifact(linkTargetTypeUsedForNaming);
     CppLinkActionBuilder builder =
         newLinkActionBuilder(linkedArtifact, linkTargetTypeUsedForNaming)
+            .setMnemonic("CppArchive")
             .addObjectFiles(ccOutputs.getObjectFiles(usePic))
             .addLtoCompilationContext(ccOutputs.getLtoCompilationContext())
             .setUsePicForLtoBackendActions(usePic)
@@ -761,10 +762,15 @@ public final class CcLinkingHelper {
               linkingMode != LinkingMode.DYNAMIC,
               dynamicLinkType.isDynamicLibrary(),
               featureConfiguration);
+      ImmutableList<CcLinkingContext.Linkstamp> linkstamps =
+          ccLinkingContext.getLinkstamps().toList();
+      if (dynamicLinkType == LinkTargetType.NODEPS_DYNAMIC_LIBRARY) {
+        linkstamps = ImmutableList.of();
+      }
       dynamicLinkActionBuilder.addLinkParams(
           libraries,
           ccLinkingContext.getFlattenedUserLinkFlags(),
-          ccLinkingContext.getLinkstamps().toList(),
+          linkstamps,
           ccLinkingContext.getNonCodeInputs().toList(),
           ruleErrorConsumer);
     }
