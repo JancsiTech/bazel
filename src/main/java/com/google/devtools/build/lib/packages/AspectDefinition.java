@@ -30,6 +30,7 @@ import com.google.devtools.build.lib.packages.Attribute.ComputedDefault;
 import com.google.devtools.build.lib.packages.ConfigurationFragmentPolicy.MissingFragmentPolicy;
 import com.google.devtools.build.lib.packages.Type.LabelClass;
 import com.google.devtools.build.lib.packages.Type.LabelVisitor;
+import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import java.io.Serializable;
 import java.util.Collection;
 import java.util.HashSet;
@@ -91,6 +92,9 @@ public final class AspectDefinition {
 
   private final ImmutableSet<AspectClass> requiredAspectClasses;
 
+  private final ImmutableSet<Label> execCompatibleWith;
+  private final ImmutableMap<String, ExecGroup> execGroups;
+
   public AdvertisedProviderSet getAdvertisedProviders() {
     return advertisedProviders;
   }
@@ -107,7 +111,9 @@ public final class AspectDefinition {
       boolean applyToFiles,
       boolean applyToGeneratingRules,
       BiPredicate<Object, String> propagateViaAttribute,
-      ImmutableSet<AspectClass> requiredAspectClasses) {
+      ImmutableSet<AspectClass> requiredAspectClasses,
+      ImmutableSet<Label> execCompatibleWith,
+      ImmutableMap<String, ExecGroup> execGroups) {
     this.aspectClass = aspectClass;
     this.advertisedProviders = advertisedProviders;
     this.requiredProviders = requiredProviders;
@@ -120,6 +126,8 @@ public final class AspectDefinition {
     this.applyToGeneratingRules = applyToGeneratingRules;
     this.propagateViaAttribute = propagateViaAttribute;
     this.requiredAspectClasses = requiredAspectClasses;
+    this.execCompatibleWith = execCompatibleWith;
+    this.execGroups = execGroups;
   }
 
   public String getName() {
@@ -138,6 +146,18 @@ public final class AspectDefinition {
   /** Returns the required toolchains declared by this aspect. */
   public ImmutableSet<ToolchainTypeRequirement> getToolchainTypes() {
     return toolchainTypes;
+  }
+
+  /**
+   * Returns the constraint values that must be present on an execution platform for this aspect.
+   */
+  public ImmutableSet<Label> execCompatibleWith() {
+    return execCompatibleWith;
+  }
+
+  /** Returns the execution groups that this aspect can use when creating actions. */
+  public ImmutableMap<String, ExecGroup> execGroups() {
+    return execGroups;
   }
 
   /**
@@ -274,6 +294,8 @@ public final class AspectDefinition {
     private boolean applyToGeneratingRules = false;
     private final Set<ToolchainTypeRequirement> toolchainTypes = new HashSet<>();
     private ImmutableSet<AspectClass> requiredAspectClasses = ImmutableSet.of();
+    private ImmutableSet<Label> execCompatibleWith = ImmutableSet.of();
+    private ImmutableMap<String, ExecGroup> execGroups = ImmutableMap.of();
 
     public Builder(AspectClass aspectClass) {
       this.aspectClass = aspectClass;
@@ -283,6 +305,7 @@ public final class AspectDefinition {
      * Asserts that this aspect can only be evaluated for rules that supply all of the providers
      * from at least one set of required providers.
      */
+    @CanIgnoreReturnValue
     public Builder requireProviderSets(
         Iterable<ImmutableSet<Class<? extends TransitiveInfoProvider>>> providerSets) {
       for (ImmutableSet<Class<? extends TransitiveInfoProvider>> providerSet : providerSets) {
@@ -295,6 +318,7 @@ public final class AspectDefinition {
      * Asserts that this aspect can only be evaluated for rules that supply all of the specified
      * providers.
      */
+    @CanIgnoreReturnValue
     public Builder requireProviders(Class<? extends TransitiveInfoProvider>... providers) {
       requiredProviders.addBuiltinSet(ImmutableSet.copyOf(providers));
       return this;
@@ -304,6 +328,7 @@ public final class AspectDefinition {
      * Asserts that this aspect can only be evaluated for rules that supply all of the providers
      * from at least one set of required providers.
      */
+    @CanIgnoreReturnValue
     public Builder requireStarlarkProviderSets(
         Iterable<ImmutableSet<StarlarkProviderIdentifier>> providerSets) {
       for (ImmutableSet<StarlarkProviderIdentifier> providerSet : providerSets) {
@@ -318,6 +343,7 @@ public final class AspectDefinition {
      * Asserts that this aspect can only be evaluated for rules that supply all of the specified
      * Starlark providers.
      */
+    @CanIgnoreReturnValue
     public Builder requireStarlarkProviders(StarlarkProviderIdentifier... starlarkProviders) {
       requiredProviders.addStarlarkSet(ImmutableSet.copyOf(starlarkProviders));
       return this;
@@ -327,6 +353,7 @@ public final class AspectDefinition {
      * Asserts that this aspect requires a list of aspects to be applied before it on the configured
      * target.
      */
+    @CanIgnoreReturnValue
     public Builder requiredAspectClasses(ImmutableSet<AspectClass> requiredAspectClasses) {
       this.requiredAspectClasses = requiredAspectClasses;
       return this;
@@ -347,11 +374,13 @@ public final class AspectDefinition {
      *     com.google.devtools.build.lib.analysis.config.BuildConfigurationValue} because {@link
      *     AspectDefinition} is a loading phase class, with no access to config symbols.
      */
+    @CanIgnoreReturnValue
     public Builder propagateViaAttribute(BiPredicate<Object, String> propagateFunction) {
       propagateViaAttribute = propagateFunction;
       return this;
     }
 
+    @CanIgnoreReturnValue
     public Builder requireAspectsWithProviders(
         Iterable<ImmutableSet<StarlarkProviderIdentifier>> providerSets) {
       for (ImmutableSet<StarlarkProviderIdentifier> providerSet : providerSets) {
@@ -362,6 +391,7 @@ public final class AspectDefinition {
       return this;
     }
 
+    @CanIgnoreReturnValue
     public Builder requireAspectsWithBuiltinProviders(
         Class<? extends TransitiveInfoProvider>... providers) {
       requiredAspectProviders.addBuiltinSet(ImmutableSet.copyOf(providers));
@@ -369,6 +399,7 @@ public final class AspectDefinition {
     }
 
     /** State that the aspect being built provides given providers. */
+    @CanIgnoreReturnValue
     public Builder advertiseProvider(Class<?>... providers) {
       for (Class<?> provider : providers) {
         advertisedProviders.addBuiltin(provider);
@@ -377,6 +408,7 @@ public final class AspectDefinition {
     }
 
     /** State that the aspect being built provides given providers. */
+    @CanIgnoreReturnValue
     public Builder advertiseProvider(ImmutableList<StarlarkProviderIdentifier> providers) {
       for (StarlarkProviderIdentifier provider : providers) {
         advertisedProviders.addStarlark(provider);
@@ -393,6 +425,7 @@ public final class AspectDefinition {
      * <p>Aspect can also declare to propagate along all attributes with {@link
      * #propagateAlongAttributes}.
      */
+    @CanIgnoreReturnValue
     public Builder propagateAlongAttribute(String attribute) {
       Preconditions.checkNotNull(attribute);
       Preconditions.checkState(
@@ -410,6 +443,7 @@ public final class AspectDefinition {
      *
      * <p>Specify either this or {@link #propagateAlongAttribute(String)}, not both.
      */
+    @CanIgnoreReturnValue
     public Builder propagateAlongAllAttributes() {
       Preconditions.checkState(
           this.propagateAlongAttributes != null,
@@ -424,10 +458,6 @@ public final class AspectDefinition {
 
     /**
      * Adds an attribute to the aspect.
-     *
-     * <p>Since aspects do not appear in BUILD files, the attribute must be either implicit (not
-     * available in the BUILD file, starting with '$') or late-bound (determined after the
-     * configuration is available, starting with ':')
      */
     public <TYPE> Builder add(Attribute.Builder<TYPE> attr) {
       Attribute attribute = attr.build();
@@ -437,14 +467,15 @@ public final class AspectDefinition {
     /**
      * Adds an attribute to the aspect.
      *
-     * <p>Since aspects do not appear in BUILD files, the attribute must be either implicit (not
-     * available in the BUILD file, starting with '$') or late-bound (determined after the
-     * configuration is available, starting with ':')
+     * <p>Aspects attributes can be of any data type if they are not public, i.e. implicit (starting
+     * with '$') or late-bound (starting with ':'). While public attributes can only be of types
+     * string, integer or boolean.
      *
      * <p>Aspect definition currently cannot handle {@link ComputedDefault} dependencies (type LABEL
      * or LABEL_LIST), because all the dependencies are resolved from the aspect definition and the
      * defining rule.
      */
+    @CanIgnoreReturnValue
     public Builder add(Attribute attribute) {
       Preconditions.checkArgument(
           attribute.isImplicit()
@@ -485,6 +516,7 @@ public final class AspectDefinition {
      *
      * <p>The value is inherited by subclasses.
      */
+    @CanIgnoreReturnValue
     public Builder requiresConfigurationFragments(
         Class<? extends Fragment>... configurationFragments) {
       configurationFragmentPolicy.requiresConfigurationFragments(
@@ -503,6 +535,7 @@ public final class AspectDefinition {
      *
      * <p>The value is inherited by subclasses.
      */
+    @CanIgnoreReturnValue
     public Builder requiresConfigurationFragments(
         ConfigurationTransition transition, Class<? extends Fragment>... configurationFragments) {
       configurationFragmentPolicy.requiresConfigurationFragments(
@@ -517,6 +550,7 @@ public final class AspectDefinition {
      * <p>In contrast to {@link #requiresConfigurationFragments(Class...)}, this method takes the
      * Starlark module names of fragments instead of their classes.
      */
+    @CanIgnoreReturnValue
     public Builder requiresConfigurationFragmentsByStarlarkBuiltinName(
         Collection<String> configurationFragmentNames) {
       configurationFragmentPolicy.requiresConfigurationFragmentsByStarlarkBuiltinName(
@@ -536,6 +570,7 @@ public final class AspectDefinition {
      * configurations other than their own. If you want to declare host config fragments, see {@link
      * com.google.devtools.build.lib.analysis.config.ConfigAwareAspectBuilder}.
      */
+    @CanIgnoreReturnValue
     public Builder requiresConfigurationFragmentsByStarlarkBuiltinName(
         ConfigurationTransition transition, Collection<String> configurationFragmentNames) {
       configurationFragmentPolicy.requiresConfigurationFragmentsByStarlarkBuiltinName(
@@ -547,6 +582,7 @@ public final class AspectDefinition {
      * Sets the policy for the case where the configuration is missing the required fragment class
      * (see {@link #requiresConfigurationFragments}).
      */
+    @CanIgnoreReturnValue
     public Builder setMissingFragmentPolicy(
         Class<?> fragmentClass, MissingFragmentPolicy missingFragmentPolicy) {
       configurationFragmentPolicy.setMissingFragmentPolicy(fragmentClass, missingFragmentPolicy);
@@ -559,6 +595,7 @@ public final class AspectDefinition {
      * <p>Default is <code>false</code>. Currently only supported for top-level aspects and targets,
      * and only for output files.
      */
+    @CanIgnoreReturnValue
     public Builder applyToFiles(boolean propagateOverGeneratedFiles) {
       this.applyToFiles = propagateOverGeneratedFiles;
       return this;
@@ -571,6 +608,7 @@ public final class AspectDefinition {
      * <p>Default is <code>false</code>. Currently only supported for aspects which do not have a
      * "required providers" list.
      */
+    @CanIgnoreReturnValue
     public Builder applyToGeneratingRules(boolean applyToGeneratingRules) {
       this.applyToGeneratingRules = applyToGeneratingRules;
       return this;
@@ -582,8 +620,27 @@ public final class AspectDefinition {
     }
 
     /** Adds the given toolchains as requirements for this aspect. */
+    @CanIgnoreReturnValue
     public Builder addToolchainTypes(Collection<ToolchainTypeRequirement> toolchainTypes) {
       this.toolchainTypes.addAll(toolchainTypes);
+      return this;
+    }
+
+    /**
+     * Adds the given constraint values to the set required for execution platforms for this aspect.
+     */
+    @CanIgnoreReturnValue
+    public Builder execCompatibleWith(ImmutableSet<Label> execCompatibleWith) {
+      this.execCompatibleWith = execCompatibleWith;
+      return this;
+    }
+
+    /** Sets the execution groups that are available for actions created by this aspect. */
+    @CanIgnoreReturnValue
+    public Builder execGroups(ImmutableMap<String, ExecGroup> execGroups) {
+      // TODO(b/230337573): validate names
+      // TODO(b/230337573): handle copy_from_default
+      this.execGroups = execGroups;
       return this;
     }
 
@@ -612,7 +669,9 @@ public final class AspectDefinition {
           applyToFiles,
           applyToGeneratingRules,
           propagateViaAttribute,
-          requiredAspectClasses);
+          requiredAspectClasses,
+          execCompatibleWith,
+          execGroups);
     }
   }
 }

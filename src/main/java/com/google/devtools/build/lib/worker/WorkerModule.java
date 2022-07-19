@@ -77,7 +77,7 @@ public class WorkerModule extends BlazeModule {
    */
   @Subscribe
   public void buildStarting(BuildStartingEvent event) {
-    WorkerOptions options = event.getRequest().getOptions(WorkerOptions.class);
+    WorkerOptions options = event.request().getOptions(WorkerOptions.class);
     if (workerFactory != null) {
       workerFactory.setReporter(options.workerVerbose ? env.getReporter() : null);
     }
@@ -138,6 +138,8 @@ public class WorkerModule extends BlazeModule {
 
     if (workerPool == null) {
       workerPool = new WorkerPool(newConfig);
+      // If workerPool is restarted then we should recreate metrics
+      WorkerMetricsCollector.instance().clear();
     }
   }
 
@@ -159,8 +161,7 @@ public class WorkerModule extends BlazeModule {
             // TODO(buchgr): Replace singleton by a command-scoped RunfilesTreeUpdater
             RunfilesTreeUpdater.INSTANCE,
             env.getOptions().getOptions(WorkerOptions.class),
-            env.getEventBus(),
-            Runtime.getRuntime(),
+            WorkerMetricsCollector.instance(),
             env.getXattrProvider());
     ExecutionOptions executionOptions =
         checkNotNull(env.getOptions().getOptions(ExecutionOptions.class));
@@ -170,7 +171,7 @@ public class WorkerModule extends BlazeModule {
   }
 
   @Subscribe
-  public void buildComplete(BuildCompleteEvent event) {
+  public void buildComplete(BuildCompleteEvent event) throws InterruptedException {
     WorkerOptions options = env.getOptions().getOptions(WorkerOptions.class);
     if (options != null && options.workerQuitAfterBuild) {
       shutdownPool(

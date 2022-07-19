@@ -31,6 +31,7 @@ import com.google.devtools.build.lib.starlarkbuildapi.FileApi;
 import com.google.devtools.build.lib.starlarkbuildapi.NativeComputedDefaultApi;
 import com.google.devtools.build.lib.starlarkbuildapi.core.ProviderApi;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import javax.annotation.Nullable;
 import net.starlark.java.annot.Param;
 import net.starlark.java.annot.ParamType;
 import net.starlark.java.annot.StarlarkBuiltin;
@@ -61,6 +62,24 @@ public class CcStarlarkInternal implements StarlarkValue {
       parameters = {@Param(name = "ctx", positional = false, named = true)})
   public String getPackageHeadersCheckingModeForStarlark(StarlarkRuleContext starlarkRuleContext) {
     return starlarkRuleContext.getRuleContext().getRule().getPackage().getDefaultHdrsCheck();
+  }
+
+  @StarlarkMethod(
+      name = "is_package_headers_checking_mode_set_for_aspect",
+      documented = false,
+      parameters = {@Param(name = "ctx", positional = false, named = true)})
+  public boolean isPackageHeadersCheckingModeSetForStarlarkAspect(
+      StarlarkRuleContext starlarkRuleContext) {
+    return starlarkRuleContext.getRuleContext().getTarget().getPackage().isDefaultHdrsCheckSet();
+  }
+
+  @StarlarkMethod(
+      name = "package_headers_checking_mode_for_aspect",
+      documented = false,
+      parameters = {@Param(name = "ctx", positional = false, named = true)})
+  public String getPackageHeadersCheckingModeForStarlarkAspect(
+      StarlarkRuleContext starlarkRuleContext) {
+    return starlarkRuleContext.getRuleContext().getTarget().getPackage().getDefaultHdrsCheck();
   }
 
   @StarlarkMethod(
@@ -179,6 +198,7 @@ public class CcStarlarkInternal implements StarlarkValue {
   static class DefParserComputedDefault extends ComputedDefault
       implements NativeComputedDefaultApi {
     @Override
+    @Nullable
     public Object getDefault(AttributeMap rule) {
       // Every cc_rule depends implicitly on the def_parser tool.
       // The only exceptions are the rules for building def_parser itself.
@@ -211,6 +231,7 @@ public class CcStarlarkInternal implements StarlarkValue {
    */
   static class StlComputedDefault extends ComputedDefault implements NativeComputedDefaultApi {
     @Override
+    @Nullable
     public Object getDefault(AttributeMap rule) {
       return rule.getOrDefault("tags", Type.STRING_LIST, ImmutableList.of()).contains("__CC_STL__")
           ? null

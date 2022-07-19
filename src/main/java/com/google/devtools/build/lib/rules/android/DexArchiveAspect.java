@@ -19,6 +19,7 @@ import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL;
 import static com.google.devtools.build.lib.packages.BuildType.TRISTATE;
 import static com.google.devtools.build.lib.packages.StarlarkProviderIdentifier.forKey;
+import static com.google.devtools.build.lib.packages.Type.INTEGER;
 import static com.google.devtools.build.lib.rules.android.AndroidCommon.getAndroidConfig;
 
 import com.google.common.base.Function;
@@ -69,8 +70,6 @@ import com.google.devtools.build.lib.rules.java.JavaCompilationInfoProvider;
 import com.google.devtools.build.lib.rules.java.JavaInfo;
 import com.google.devtools.build.lib.rules.java.JavaRuleOutputJarsProvider;
 import com.google.devtools.build.lib.rules.java.JavaRuleOutputJarsProvider.JavaOutput;
-import com.google.devtools.build.lib.rules.java.proto.JavaProtoAspectCommon;
-import com.google.devtools.build.lib.rules.java.proto.JavaProtoLibraryAspectProvider;
 import com.google.devtools.build.lib.rules.proto.ProtoInfo;
 import com.google.devtools.build.lib.rules.proto.ProtoLangToolchainProvider;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
@@ -81,6 +80,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import javax.annotation.Nullable;
 
 /** Aspect to {@link DexArDchiveProvider build .dex Archives} from Jars. */
 public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAspectFactory {
@@ -97,6 +97,8 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
         AspectParameters.Builder result = new AspectParameters.Builder();
         TriState incrementalAttr = attributes.get("incremental_dexing", TRISTATE);
         result.addAttribute("incremental_dexing", incrementalAttr.name());
+        result.addAttribute(
+            "min_sdk_version", attributes.get("min_sdk_version", INTEGER).toString());
         return result.build();
       };
   /**
@@ -129,7 +131,7 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
           "$build_stamp_deps", // for build stamp runtime class deps
           "$build_stamp_mergee_manifest_lib", // for empty build stamp Service class implementation
           // To get from proto_library through proto_lang_toolchain rule to proto runtime library.
-          JavaProtoAspectCommon.LITE_PROTO_TOOLCHAIN_ATTR,
+          ":aspect_proto_toolchain_for_javalite",
           "runtime");
 
   private static final FlagMatcher DEXOPTS_SUPPORTED_IN_DEXBUILDER =
@@ -180,8 +182,7 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
                                 toolsRepository + AndroidRuleClasses.DEFAULT_SDK))))
             .requiresConfigurationFragments(AndroidConfiguration.class)
             .requireAspectsWithProviders(
-                ImmutableList.of(ImmutableSet.of(forKey(JavaInfo.PROVIDER.getKey()))))
-            .requireAspectsWithBuiltinProviders(JavaProtoLibraryAspectProvider.class);
+                ImmutableList.of(ImmutableSet.of(forKey(JavaInfo.PROVIDER.getKey()))));
     if (TriState.valueOf(params.getOnlyValueOfAttribute("incremental_dexing")) != TriState.NO) {
       // Marginally improves "query2" precision for targets that disable incremental dexing
       result.add(
@@ -239,9 +240,14 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
 
     Iterable<Artifact> extraToolchainJars = getPlatformBasedToolchainJars(ruleContext);
 
+    int minSdkVersion = 0;
+    if (!params.getAttribute("min_sdk_version").isEmpty()) {
+      minSdkVersion = Integer.valueOf(params.getOnlyValueOfAttribute("min_sdk_version"));
+    }
+
     Function<Artifact, Artifact> desugaredJars =
         desugarJarsIfRequested(
-            ctadBase.getConfiguredTarget(), ruleContext, result, extraToolchainJars);
+            ctadBase.getConfiguredTarget(), ruleContext, minSdkVersion, result, extraToolchainJars);
 
     TriState incrementalAttr =
         TriState.valueOf(params.getOnlyValueOfAttribute("incremental_dexing"));
@@ -264,15 +270,19 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
     if (runtimeJars != null) {
       boolean basenameClash = checkBasenameClash(runtimeJars);
       Set<Set<String>> aspectDexopts = aspectDexopts(ruleContext);
+      String minSdkFilenamePart = minSdkVersion > 0 ? "--min_sdk_version=" + minSdkVersion : "";
       for (Artifact jar : runtimeJars) {
         for (Set<String> incrementalDexopts : aspectDexopts) {
           // Since we're potentially dexing the same jar multiple times with different flags, we
           // need to write unique artifacts for each flag combination. Here, it is convenient to
           // distinguish them by putting the flags that were used for creating the artifacts into
-          // their filenames.
+          // their filenames. Since min_sdk_version is a parameter to the aspect from the
+          // android_binary target that the aspect originates from, it's handled separately so that
+          // the correct min sdk value is used.
           String uniqueFilename =
               (basenameClash ? jar.getRootRelativePathString() : jar.getFilename())
                   + Joiner.on("").join(incrementalDexopts)
+                  + minSdkFilenamePart
                   + ".dex.zip";
           Artifact dexArchive =
               createDexArchiveAction(
@@ -280,6 +290,7 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
                   ASPECT_DEXBUILDER_PREREQ,
                   desugaredJars.apply(jar),
                   incrementalDexopts,
+                  minSdkVersion,
                   AndroidBinary.getDxArtifact(ruleContext, uniqueFilename));
           dexArchives.addDexArchive(incrementalDexopts, dexArchive, jar);
         }
@@ -296,6 +307,7 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
   private Function<Artifact, Artifact> desugarJarsIfRequested(
       ConfiguredTarget base,
       RuleContext ruleContext,
+      int minSdkVersion,
       ConfiguredAspect.Builder result,
       Iterable<Artifact> extraToolchainJars) {
     if (!getAndroidConfig(ruleContext).desugarJava8()) {
@@ -344,7 +356,12 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
       for (Artifact jar : jarsToProcess) {
         Artifact desugared =
             createDesugarAction(
-                ruleContext, basenameClash, jar, bootclasspath, compileTimeClasspath);
+                ruleContext,
+                basenameClash,
+                jar,
+                bootclasspath,
+                compileTimeClasspath,
+                minSdkVersion);
         newlyDesugared.put(jar, desugared);
         desugaredJars.addDesugaredJar(jar, desugared);
       }
@@ -353,6 +370,7 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
     return Functions.forMap(newlyDesugared);
   }
 
+  @Nullable
   private static Iterable<Artifact> getProducedRuntimeJars(
       ConfiguredTarget base, RuleContext ruleContext, Iterable<Artifact> extraToolchainJars) {
     if (isProtoLibrary(ruleContext)) {
@@ -360,13 +378,16 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
         JavaRuleOutputJarsProvider outputJarsProvider =
             base.getProvider(JavaRuleOutputJarsProvider.class);
         if (outputJarsProvider != null) {
+          // TODO(b/207058960): remove after enabling Starlark java proto libraries
           return outputJarsProvider.getJavaOutputs().stream()
               .map(JavaOutput::getClassJar)
               .collect(toImmutableList());
         } else {
           JavaInfo javaInfo = JavaInfo.getJavaInfo(base);
           if (javaInfo != null) {
-            return javaInfo.getDirectRuntimeJars();
+            return javaInfo.getJavaOutputs().stream()
+                .map(JavaOutput::getClassJar)
+                .collect(toImmutableList());
           }
         }
       }
@@ -393,6 +414,7 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
     return null;
   }
 
+  @Nullable
   private static JavaCompilationArgsProvider getJavaCompilationArgsProvider(
       ConfiguredTarget base, RuleContext ruleContext) {
     JavaCompilationArgsProvider provider =
@@ -407,6 +429,7 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
     return "proto_library".equals(ruleContext.getRule().getRuleClass());
   }
 
+  @Nullable
   private static Artifact getAndroidLibraryRJar(ConfiguredTarget base) {
     AndroidIdeInfoProvider provider =
         (AndroidIdeInfoProvider) base.get(AndroidIdeInfoProvider.PROVIDER.getKey());
@@ -416,6 +439,7 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
     return null;
   }
 
+  @Nullable
   private static Artifact getAndroidBuildStampJar(ConfiguredTarget base) {
     AndroidApplicationResourceInfo provider =
         (AndroidApplicationResourceInfo) base.get(AndroidApplicationResourceInfo.PROVIDER.getKey());
@@ -466,16 +490,21 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
       boolean disambiguateBasenames,
       Artifact jar,
       NestedSet<Artifact> bootclasspath,
-      NestedSet<Artifact> compileTimeClasspath) {
+      NestedSet<Artifact> compileTimeClasspath,
+      int minSdkVersion) {
+
+    String minSdkFilenamePart = minSdkVersion > 0 ? "_minsdk=" + minSdkVersion : "";
     return createDesugarAction(
         ruleContext,
         ASPECT_DESUGAR_PREREQ,
         jar,
         bootclasspath,
         compileTimeClasspath,
+        minSdkVersion,
         AndroidBinary.getDxArtifact(
             ruleContext,
             (disambiguateBasenames ? jar.getRootRelativePathString() : jar.getFilename())
+                + minSdkFilenamePart
                 + "_desugared.jar"));
   }
 
@@ -485,6 +514,7 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
       Artifact jar,
       NestedSet<Artifact> bootclasspath,
       NestedSet<Artifact> classpath,
+      int minSdkVersion,
       Artifact result) {
     SpawnAction.Builder action =
         new SpawnAction.Builder()
@@ -519,6 +549,9 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
     if (stripOutputPaths) {
       args.stripOutputPaths(result.getExecPath().subFragment(0, 1));
     }
+    if (minSdkVersion > 0) {
+      args.add("--min_sdk_version", Integer.toString(minSdkVersion));
+    }
 
     action
         .addCommandLine(
@@ -545,8 +578,10 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
       Artifact jar,
       NestedSet<Artifact> bootclasspath,
       NestedSet<Artifact> classpath,
+      int minSdkVersion,
       Artifact result) {
-    return createDesugarAction(ruleContext, "$desugar", jar, bootclasspath, classpath, result);
+    return createDesugarAction(
+        ruleContext, "$desugar", jar, bootclasspath, classpath, minSdkVersion, result);
   }
 
   /**
@@ -576,6 +611,7 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
       String dexbuilderPrereq,
       Artifact jar,
       Set<String> incrementalDexopts,
+      int minSdkVersion,
       Artifact dexArchive) {
     SpawnAction.Builder dexbuilder =
         new SpawnAction.Builder()
@@ -602,6 +638,9 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
             .addExecPath("--input_jar", jar)
             .addExecPath("--output_zip", dexArchive)
             .addAll(ImmutableList.copyOf(incrementalDexopts));
+    if (minSdkVersion > 0) {
+      args.add("--min_sdk_version", Integer.toString(minSdkVersion));
+    }
     if (stripOutputPaths) {
       args.stripOutputPaths(dexArchive.getExecPath().subFragment(0, 1));
     }

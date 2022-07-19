@@ -60,6 +60,7 @@ import com.google.devtools.build.lib.packages.CachingPackageLocator;
 import com.google.devtools.build.lib.packages.NoSuchPackageException;
 import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.packages.Package;
+import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.pkgcache.FilteringPolicies;
@@ -191,7 +192,7 @@ public class GenQuery implements RuleConfiguredTargetFactory {
           executeQuery(
               ruleContext,
               queryOptions,
-              ruleContext.attributes().get("scope", BuildType.LABEL_LIST),
+              ruleContext.attributes().get("scope", BuildType.GENQUERY_SCOPE_TYPE_LIST),
               query,
               outputArtifact.getPath().getFileSystem().getDigestFunction().getHashFunction());
     }
@@ -635,6 +636,7 @@ public class GenQuery implements RuleConfiguredTargetFactory {
       throw new UnsupportedOperationException();
     }
 
+    @Nullable
     @Override
     public Path getBuildFileForPackage(PackageIdentifier packageId) {
       Package pkg = pkgMap.get(packageId);
@@ -644,6 +646,7 @@ public class GenQuery implements RuleConfiguredTargetFactory {
       return pkg.getBuildFile().getPath();
     }
 
+    @Nullable
     @Override
     public String getBaseNameForLoadedPackage(PackageIdentifier packageName) {
       // TODO(b/123795023): we should have the data here but we don't have all packages for Starlark

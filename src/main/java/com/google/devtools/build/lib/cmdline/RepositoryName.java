@@ -28,20 +28,21 @@ import java.util.Objects;
 import java.util.concurrent.CompletionException;
 import java.util.regex.Pattern;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Starlark;
 
-/** The name of an external repository. */
+/** The canonical name of an external repository. */
 public final class RepositoryName {
 
   @SerializationConstant
-  public static final RepositoryName BAZEL_TOOLS = new RepositoryName("@bazel_tools");
+  public static final RepositoryName BAZEL_TOOLS = new RepositoryName("bazel_tools");
 
-  @SerializationConstant
-  public static final RepositoryName LOCAL_CONFIG_PLATFORM =
-      new RepositoryName("@local_config_platform");
+  @SerializationConstant public static final RepositoryName MAIN = new RepositoryName("");
 
-  @SerializationConstant public static final RepositoryName MAIN = new RepositoryName("@");
+  private static final Pattern VALID_REPO_NAME = Pattern.compile("@?[\\w\\-.~]*");
 
-  private static final Pattern VALID_REPO_NAME = Pattern.compile("@[\\w\\-.]*");
+  // Must start with a letter. Can contain ASCII letters and digits, underscore, dash, and dot.
+  private static final Pattern VALID_USER_PROVIDED_NAME = Pattern.compile("[a-zA-Z][-.\\w]*$");
 
   private static final LoadingCache<String, RepositoryName> repositoryNameCache =
       Caffeine.newBuilder()
@@ -53,8 +54,7 @@ public final class RepositoryName {
               });
 
   /**
-   * Makes sure that name is a valid repository name and creates a new RepositoryName using it. The
-   * given string must not begin with a '@'.
+   * Makes sure that name is a valid repository name and creates a new RepositoryName using it.
    *
    * @throws LabelSyntaxException if the name is invalid
    */
@@ -62,27 +62,23 @@ public final class RepositoryName {
     if (name.isEmpty()) {
       return MAIN;
     }
-    // TODO(b/200024947): Get rid of the '@' in the #name field.
     try {
-      return repositoryNameCache.get('@' + name);
+      return repositoryNameCache.get(name);
     } catch (CompletionException e) {
       Throwables.propagateIfPossible(e.getCause(), LabelSyntaxException.class);
       throw e;
     }
   }
 
-  /**
-   * Creates a RepositoryName from a known-valid string. The given string must not begin with a '@'.
-   */
+  /** Creates a RepositoryName from a known-valid string. */
   public static RepositoryName createUnvalidated(String name) {
-    Preconditions.checkArgument(!name.startsWith("@"), "Do not prefix @ to repo names!");
     if (name.isEmpty()) {
       // NOTE(wyv): Without this `if` clause, a lot of Google-internal integration tests would start
       //   failing. This suggests to me that something is comparing RepositoryName objects using
       //   reference equality instead of #equals().
       return MAIN;
     }
-    return repositoryNameCache.get("@" + name);
+    return repositoryNameCache.get(name);
   }
 
   /**
@@ -93,6 +89,7 @@ public final class RepositoryName {
    *     "external/"-prefix and repository name, or null if none was found or the repository name
    *     was invalid.
    */
+  @Nullable
   public static Pair<RepositoryName, PathFragment> fromPathFragment(
       PathFragment path, boolean siblingRepositoryLayout) {
     if (!path.isMultiSegment()) {
@@ -119,14 +116,14 @@ public final class RepositoryName {
   private final String name;
 
   /**
-   * Store the name if the owner repository where this repository name is requested. If this field
+   * Store the name of the owner repository where this repository name is requested. If this field
    * is not null, it means this instance represents the requested repository name that is actually
    * not visible from the owner repository and should fail in {@code RepositoryDelegatorFunction}
    * when fetching the repository.
    */
-  private final String ownerRepoIfNotVisible;
+  private final RepositoryName ownerRepoIfNotVisible;
 
-  private RepositoryName(String name, String ownerRepoIfNotVisible) {
+  private RepositoryName(String name, RepositoryName ownerRepoIfNotVisible) {
     this.name = name;
     this.ownerRepoIfNotVisible = ownerRepoIfNotVisible;
   }
@@ -140,27 +137,40 @@ public final class RepositoryName {
    * message is sanitized.
    */
   static void validate(String name) throws LabelSyntaxException {
-    if (name.isEmpty() || name.equals("@")) {
+    if (name.isEmpty()) {
       return;
     }
 
     // Some special cases for more user-friendly error messages.
-    if (name.equals("@.") || name.equals("@..")) {
+    if (name.equals(".") || name.equals("..")) {
       throw LabelParser.syntaxErrorf(
-          "invalid repository name '%s': repo names are not allowed to be '%s'", name, name);
+          "invalid repository name '@%s': repo names are not allowed to be '@%s'", name, name);
     }
 
     if (!VALID_REPO_NAME.matcher(name).matches()) {
       throw LabelParser.syntaxErrorf(
-          "invalid repository name '%s': repo names may contain only A-Z, a-z, 0-9, '-', '_' and"
-              + " '.'",
+          "invalid repository name '@%s': repo names may contain only A-Z, a-z, 0-9, '-', '_', '.'"
+              + " and '~'",
           StringUtilities.sanitizeControlChars(name));
     }
   }
 
-  /** Returns the repository name without the leading "{@literal @}". */
+  /**
+   * Validates a repo name provided by the user. Such names have tighter restrictions; for example,
+   * they can only start with a letter, and cannot contain a tilde (~).
+   */
+  public static void validateUserProvidedRepoName(String name) throws EvalException {
+    if (!VALID_USER_PROVIDED_NAME.matcher(name).matches()) {
+      throw Starlark.errorf(
+          "invalid user-provided repo name '%s': valid names may contain only A-Z, a-z, 0-9, '-',"
+              + " '_', '.', and must start with a letter",
+          StringUtilities.sanitizeControlChars(name));
+    }
+  }
+
+  /** Returns the bare repository name without the leading "{@literal @}". */
   public String getName() {
-    return name.substring(1);
+    return name;
   }
 
   /**
@@ -168,8 +178,9 @@ public final class RepositoryName {
    * actually not visible from the owner repository and should fail in {@code
    * RepositoryDelegatorFunction} when fetching with this {@link RepositoryName} instance.
    */
-  public RepositoryName toNonVisible(String ownerRepo) {
+  public RepositoryName toNonVisible(RepositoryName ownerRepo) {
     Preconditions.checkNotNull(ownerRepo);
+    Preconditions.checkArgument(ownerRepo.isVisible());
     return new RepositoryName(name, ownerRepo);
   }
 
@@ -178,18 +189,18 @@ public final class RepositoryName {
   }
 
   @Nullable
-  public String getOwnerRepoIfNotVisible() {
+  public RepositoryName getOwnerRepoIfNotVisible() {
     return ownerRepoIfNotVisible;
   }
 
   /** Returns if this is the main repository, that is, {@link #getName} is empty. */
   public boolean isMain() {
-    return name.equals("@");
+    return name.isEmpty();
   }
 
   /** Returns the repository name, with leading "{@literal @}". */
   public String getNameWithAt() {
-    return name;
+    return '@' + name;
   }
 
   /**
@@ -245,13 +256,11 @@ public final class RepositoryName {
     }
     RepositoryName other = (RepositoryName) object;
     return OsPathPolicy.getFilePathOs().equals(name, other.name)
-        && OsPathPolicy.getFilePathOs().equals(ownerRepoIfNotVisible, other.ownerRepoIfNotVisible);
+        && Objects.equals(ownerRepoIfNotVisible, other.ownerRepoIfNotVisible);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(
-        OsPathPolicy.getFilePathOs().hash(name),
-        OsPathPolicy.getFilePathOs().hash(ownerRepoIfNotVisible));
+    return Objects.hash(OsPathPolicy.getFilePathOs().hash(name), ownerRepoIfNotVisible);
   }
 }

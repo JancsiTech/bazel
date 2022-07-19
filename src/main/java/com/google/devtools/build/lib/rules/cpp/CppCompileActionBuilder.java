@@ -33,6 +33,7 @@ import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.
 import com.google.devtools.build.lib.rules.cpp.CcCommon.CoptsFilter;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -58,6 +59,7 @@ public class CppCompileActionBuilder {
   private Artifact dwoFile;
   private Artifact ltoIndexingFile;
   private Artifact dotdFile;
+  private Artifact diagnosticsFile;
   private Artifact gcnoFile;
   private CcCompilationContext ccCompilationContext = CcCompilationContext.EMPTY;
   private final List<String> pluginOpts = new ArrayList<>();
@@ -158,11 +160,13 @@ public class CppCompileActionBuilder {
     return setSourceFileUnchecked(sourceFile);
   }
 
+  @CanIgnoreReturnValue
   private CppCompileActionBuilder setSourceFileUnchecked(Artifact sourceFile) {
     this.sourceFile = sourceFile;
     return this;
   }
 
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder setAdditionalOutputs(ImmutableList<Artifact> additionalOutputs) {
     this.additionalOutputs = additionalOutputs;
     return this;
@@ -306,6 +310,7 @@ public class CppCompileActionBuilder {
             prunableHeaders,
             outputFile,
             dotdFile,
+            diagnosticsFile,
             gcnoFile,
             dwoFile,
             ltoIndexingFile,
@@ -382,6 +387,7 @@ public class CppCompileActionBuilder {
    * Set action name that is used to pick the right action_config and features from {@link
    * FeatureConfiguration}. By default the action name is decided from the source filetype.
    */
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder setActionName(String actionName) {
     Preconditions.checkState(
         this.actionName == null,
@@ -392,9 +398,8 @@ public class CppCompileActionBuilder {
     return this;
   }
 
-  /**
-   * Sets the feature configuration to be used for the action.
-   */
+  /** Sets the feature configuration to be used for the action. */
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder setFeatureConfiguration(
       FeatureConfiguration featureConfiguration) {
     Preconditions.checkNotNull(featureConfiguration);
@@ -407,6 +412,7 @@ public class CppCompileActionBuilder {
   }
 
   /** Sets the feature build variables to be used for the action. */
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder setVariables(CcToolchainVariables variables) {
     this.variables = variables;
     return this;
@@ -417,6 +423,7 @@ public class CppCompileActionBuilder {
     return variables;
   }
 
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder addExecutionInfo(Map<String, String> executionInfo) {
     this.executionInfo.putAll(executionInfo);
     return this;
@@ -426,6 +433,7 @@ public class CppCompileActionBuilder {
     return executionInfo;
   }
 
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder setActionClassId(UUID uuid) {
     this.actionClassId = uuid;
     return this;
@@ -435,21 +443,25 @@ public class CppCompileActionBuilder {
     return actionClassId;
   }
 
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder addMandatoryInputs(NestedSet<Artifact> artifacts) {
     mandatoryInputsBuilder.addTransitive(artifacts);
     return this;
   }
 
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder addMandatoryInputs(List<Artifact> artifacts) {
     mandatoryInputsBuilder.addAll(artifacts);
     return this;
   }
 
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder addTransitiveMandatoryInputs(NestedSet<Artifact> artifacts) {
     mandatoryInputsBuilder.addTransitive(artifacts);
     return this;
   }
 
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder addAdditionalIncludeScanningRoots(
       List<Artifact> additionalIncludeScanningRoots) {
     this.additionalIncludeScanningRoots.addAll(additionalIncludeScanningRoots);
@@ -465,12 +477,20 @@ public class CppCompileActionBuilder {
         && !featureConfiguration.isEnabled(CppRuleClasses.PARSE_SHOWINCLUDES);
   }
 
-  public CppCompileActionBuilder setOutputs(Artifact outputFile, Artifact dotdFile) {
+  public boolean serializedDiagnosticsFilesEnabled() {
+    return featureConfiguration.isEnabled(CppRuleClasses.SERIALIZED_DIAGNOSTICS_FILE);
+  }
+
+  @CanIgnoreReturnValue
+  public CppCompileActionBuilder setOutputs(
+      Artifact outputFile, Artifact dotdFile, Artifact diagnosticsFile) {
     this.outputFile = outputFile;
     this.dotdFile = dotdFile;
+    this.diagnosticsFile = diagnosticsFile;
     return this;
   }
 
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder setOutputs(
       ActionConstructionContext actionConstructionContext,
       RuleErrorConsumer ruleErrorConsumer,
@@ -492,9 +512,19 @@ public class CppCompileActionBuilder {
     } else {
       dotdFile = null;
     }
+    if (serializedDiagnosticsFilesEnabled()) {
+      String diagnosticsFileName =
+          CppHelper.getDiagnosticsFileName(ccToolchain, outputCategory, outputName);
+      diagnosticsFile =
+          CppHelper.getCompileOutputArtifact(
+              actionConstructionContext, label, diagnosticsFileName, configuration);
+    } else {
+      diagnosticsFile = null;
+    }
     return this;
   }
 
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder setDwoFile(Artifact dwoFile) {
     this.dwoFile = dwoFile;
     return this;
@@ -504,6 +534,7 @@ public class CppCompileActionBuilder {
    * Set the minimized bitcode file emitted by this (ThinLTO) compilation that can be used in place
    * of the full bitcode outputFile in the LTO indexing step.
    */
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder setLtoIndexingFile(Artifact ltoIndexingFile) {
     this.ltoIndexingFile = ltoIndexingFile;
     return this;
@@ -517,11 +548,17 @@ public class CppCompileActionBuilder {
     return this.dotdFile;
   }
 
+  public Artifact getDiagnosticsFile() {
+    return this.diagnosticsFile;
+  }
+
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder setGcnoFile(Artifact gcnoFile) {
     this.gcnoFile = gcnoFile;
     return this;
   }
 
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder setCcCompilationContext(
       CcCompilationContext ccCompilationContext) {
     this.ccCompilationContext = ccCompilationContext;
@@ -529,22 +566,26 @@ public class CppCompileActionBuilder {
   }
 
   /** Sets whether the CompileAction should use pic mode. */
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder setPicMode(boolean usePic) {
     this.usePic = usePic;
     return this;
   }
 
   /** Sets the CppSemantics for this compile. */
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder setSemantics(CppSemantics semantics) {
     this.cppSemantics = semantics;
     return this;
   }
 
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder setShareable(boolean shareable) {
     this.shareable = shareable;
     return this;
   }
 
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder setShouldScanIncludes(boolean shouldScanIncludes) {
     this.shouldScanIncludes = shouldScanIncludes;
     return this;
@@ -558,6 +599,7 @@ public class CppCompileActionBuilder {
     return ccToolchain;
   }
 
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder setCoptsFilter(CoptsFilter coptsFilter) {
     this.coptsFilter = Preconditions.checkNotNull(coptsFilter);
     return this;
@@ -567,12 +609,14 @@ public class CppCompileActionBuilder {
     return coptsFilter;
   }
 
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder setBuiltinIncludeFiles(
       ImmutableList<Artifact> builtinIncludeFiles) {
     this.builtinIncludeFiles = builtinIncludeFiles;
     return this;
   }
 
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder setInputsForInvalidation(
       NestedSet<Artifact> inputsForInvalidation) {
     this.inputsForInvalidation = inputsForInvalidation;
@@ -583,9 +627,8 @@ public class CppCompileActionBuilder {
     return getOutputFile().getExecPath();
   }
 
-  /**
-   * Do not use! This method is only intended for testing.
-   */
+  /** Do not use! This method is only intended for testing. */
+  @CanIgnoreReturnValue
   @VisibleForTesting
   public CppCompileActionBuilder setActionEnvironment(ActionEnvironment env) {
     this.env = env;
@@ -596,12 +639,14 @@ public class CppCompileActionBuilder {
     return env;
   }
 
+  @CanIgnoreReturnValue
   public CppCompileActionBuilder setAdditionalPrunableHeaders(
       NestedSet<Artifact> additionalPrunableHeaders) {
     this.additionalPrunableHeaders = Preconditions.checkNotNull(additionalPrunableHeaders);
     return this;
   }
 
+  @CanIgnoreReturnValue
   @VisibleForTesting
   public CppCompileActionBuilder setBuiltinIncludeDirectories(
       ImmutableList<PathFragment> builtinIncludeDirectories) {

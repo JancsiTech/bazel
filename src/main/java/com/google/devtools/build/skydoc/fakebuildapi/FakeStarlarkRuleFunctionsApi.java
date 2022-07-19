@@ -173,9 +173,7 @@ public class FakeStarlarkRuleFunctionsApi implements StarlarkRuleFunctionsApi<Fi
   @Override
   public Label label(String labelString, StarlarkThread thread) throws EvalException {
     try {
-      return Label.parseAbsolute(
-          labelString,
-          /* repositoryMapping= */ ImmutableMap.of());
+      return Label.parseCanonical(labelString);
     } catch (LabelSyntaxException e) {
       throw Starlark.errorf("Illegal absolute label syntax: %s", labelString);
     }
@@ -196,6 +194,8 @@ public class FakeStarlarkRuleFunctionsApi implements StarlarkRuleFunctionsApi<Fi
       boolean useToolchainTransition,
       String doc,
       Boolean applyToFiles,
+      Sequence<?> execCompatibleWith,
+      Object execGroups,
       StarlarkThread thread)
       throws EvalException {
     FakeStarlarkAspect fakeAspect = new FakeStarlarkAspect();

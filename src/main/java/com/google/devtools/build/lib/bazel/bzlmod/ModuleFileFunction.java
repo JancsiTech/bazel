@@ -84,6 +84,7 @@ public class ModuleFileFunction implements SkyFunction {
     this.builtinModules = builtinModules;
   }
 
+  @Nullable
   @Override
   public SkyValue compute(SkyKey skyKey, Environment env)
       throws SkyFunctionException, InterruptedException {
@@ -137,6 +138,7 @@ public class ModuleFileFunction implements SkyFunction {
     return NonRootModuleFileValue.create(module);
   }
 
+  @Nullable
   private SkyValue computeForRootModule(StarlarkSemantics starlarkSemantics, Environment env)
       throws SkyFunctionException, InterruptedException {
     RootedPath moduleFilePath =
@@ -162,7 +164,7 @@ public class ModuleFileFunction implements SkyFunction {
     if (rootOverride != null) {
       throw errorf(Code.BAD_MODULE, "invalid override for the root module found: %s", rootOverride);
     }
-    ImmutableMap<String, String> nonRegistryOverrideCanonicalRepoNameLookup =
+    ImmutableMap<RepositoryName, String> nonRegistryOverrideCanonicalRepoNameLookup =
         Maps.filterValues(overrides, override -> override instanceof NonRegistryOverride)
             .keySet()
             .stream()
@@ -222,12 +224,9 @@ public class ModuleFileFunction implements SkyFunction {
     // If there is a non-registry override for this module, we need to fetch the corresponding repo
     // first and read the module file from there.
     if (override instanceof NonRegistryOverride) {
-      String canonicalRepoName = key.getCanonicalRepoName();
+      RepositoryName canonicalRepoName = key.getCanonicalRepoName();
       RepositoryDirectoryValue repoDir =
-          (RepositoryDirectoryValue)
-              env.getValue(
-                  RepositoryDirectoryValue.key(
-                      RepositoryName.createUnvalidated(canonicalRepoName)));
+          (RepositoryDirectoryValue) env.getValue(RepositoryDirectoryValue.key(canonicalRepoName));
       if (repoDir == null) {
         return null;
       }

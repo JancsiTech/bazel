@@ -142,7 +142,7 @@ public class PythonStarlarkApiTest extends BuildViewTestCase {
         "    name = 'pyruntime',",
         "    interpreter = ':intr',",
         "    files = ['data.txt'],",
-        "    python_version = 'PY2',",
+        "    python_version = 'PY3',",
         ")",
         "userruntime(",
         "    name = 'userruntime',",
@@ -152,7 +152,7 @@ public class PythonStarlarkApiTest extends BuildViewTestCase {
         ")",
         "py_runtime_pair(",
         "    name = 'userruntime_pair',",
-        "    py2_runtime = 'userruntime',",
+        "    py3_runtime = 'userruntime',",
         ")",
         "toolchain(",
         "    name = 'usertoolchain',",
@@ -165,7 +165,10 @@ public class PythonStarlarkApiTest extends BuildViewTestCase {
         "    name = 'pybin',",
         "    srcs = ['pybin.py'],",
         ")");
-    useConfiguration("--extra_toolchains=//pkg:usertoolchain");
+    useConfiguration(
+        "--extra_toolchains=//pkg:usertoolchain", "--incompatible_use_python_toolchains=true");
+    // Starlark implementation doesn't yet support toolchain resolution
+    setBuildLanguageOptions("--experimental_builtins_injection_override=-py_test,-py_binary");
     ConfiguredTarget target = getConfiguredTarget("//pkg:pybin");
     assertThat(collectRunfiles(target).toList())
         .containsAtLeast(getSourceArtifact("pkg/data.txt"), getSourceArtifact("pkg/userdata.txt"));

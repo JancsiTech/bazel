@@ -324,6 +324,7 @@ public final class AndroidBinaryMobileInstall {
         .addOutputGroup("android_incremental_deploy_info", incrementalDeployInfo);
   }
 
+  @Nullable
   private static Artifact getStubDex(
       RuleContext ruleContext, JavaSemantics javaSemantics, boolean split)
       throws InterruptedException {
@@ -367,9 +368,9 @@ public final class AndroidBinaryMobileInstall {
     Artifact stubDex =
         getMobileInstallArtifact(
             ruleContext,
-            split ? "split_stub_application/classes.dex" : "stub_application/classes.dex");
+            split ? "split_stub_application/classes.dex.zip" : "stub_application/classes.dex.zip");
     AndroidCommon.createDexAction(
-        ruleContext, stubDeployJar, stubDex, ImmutableList.<String>of(), false, null);
+        ruleContext, stubDeployJar, stubDex, ImmutableList.<String>of(), 0, null);
 
     return stubDex;
   }

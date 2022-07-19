@@ -159,7 +159,7 @@ public class RegisteredToolchainsFunction implements SkyFunction {
       TargetPattern.Parser parser =
           new TargetPattern.Parser(
               PathFragment.EMPTY_FRAGMENT,
-              RepositoryName.createUnvalidated(module.getCanonicalRepoName()),
+              module.getCanonicalRepoName(),
               bazelModuleResolutionValue.getFullRepoMapping(module.getKey()));
       for (String pattern : module.getToolchainsToRegister()) {
         try {
@@ -173,6 +173,7 @@ public class RegisteredToolchainsFunction implements SkyFunction {
     return toolchains.build();
   }
 
+  @Nullable
   private static ImmutableList<DeclaredToolchainInfo> configureRegisteredToolchains(
       Environment env, BuildConfigurationValue configuration, List<Label> labels)
       throws InterruptedException, RegisteredToolchainsFunctionException {

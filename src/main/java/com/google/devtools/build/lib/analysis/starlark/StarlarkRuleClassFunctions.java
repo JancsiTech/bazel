@@ -15,9 +15,9 @@
 package com.google.devtools.build.lib.analysis.starlark;
 
 import static com.google.devtools.build.lib.analysis.BaseRuleClasses.RUN_UNDER;
-import static com.google.devtools.build.lib.analysis.BaseRuleClasses.TEST_RUNNER_EXEC_GROUP;
 import static com.google.devtools.build.lib.analysis.BaseRuleClasses.TIMEOUT_DEFAULT;
 import static com.google.devtools.build.lib.analysis.BaseRuleClasses.getTestRuntimeLabelList;
+import static com.google.devtools.build.lib.analysis.test.ExecutionInfo.DEFAULT_TEST_RUNNER_EXEC_GROUP;
 import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
@@ -335,10 +335,6 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi<Arti
 
     if (implicitOutputs != Starlark.NONE) {
       if (implicitOutputs instanceof StarlarkFunction) {
-        // TODO(brandjon): Embedding bazelContext in a callback is not thread safe! Instead
-        // construct a new BazelStarlarkContext with copies of the relevant fields that are safe to
-        // share. Maybe create a method on BazelStarlarkContext for safely constructing a child
-        // context.
         StarlarkCallbackHelper callback =
             new StarlarkCallbackHelper(
                 (StarlarkFunction) implicitOutputs, thread.getSemantics(), bazelContext);
@@ -394,8 +390,8 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi<Arti
       }
       builder.addExecGroups(execGroupDict);
     }
-    if (test && !builder.hasExecGroup(TEST_RUNNER_EXEC_GROUP)) {
-      builder.addExecGroup(TEST_RUNNER_EXEC_GROUP);
+    if (test && !builder.hasExecGroup(DEFAULT_TEST_RUNNER_EXEC_GROUP)) {
+      builder.addExecGroup(DEFAULT_TEST_RUNNER_EXEC_GROUP);
     }
 
     if (!buildSetting.equals(Starlark.NONE) && !cfg.equals(Starlark.NONE)) {
@@ -536,10 +532,10 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi<Arti
     return attributes.build();
   }
 
-  private static ImmutableList<Label> parseExecCompatibleWith(
+  private static ImmutableSet<Label> parseExecCompatibleWith(
       Sequence<?> inputs, StarlarkThread thread) throws EvalException {
-    ImmutableList.Builder<Label> parsedLabels = new ImmutableList.Builder<>();
-    LabelConverter converter = LabelConverter.forThread(thread);
+    ImmutableSet.Builder<Label> parsedLabels = new ImmutableSet.Builder<>();
+    LabelConverter converter = LabelConverter.forBzlEvaluatingThread(thread);
     for (String input : Sequence.cast(inputs, String.class, "exec_compatible_with")) {
       try {
         Label label = converter.convert(input);
@@ -566,6 +562,8 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi<Arti
       boolean useToolchainTransition,
       String doc,
       Boolean applyToGeneratingRules,
+      Sequence<?> rawExecCompatibleWith,
+      Object rawExecGroups,
       StarlarkThread thread)
       throws EvalException {
     ImmutableList.Builder<String> attrAspects = ImmutableList.builder();
@@ -655,6 +653,24 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi<Arti
           "An aspect cannot simultaneously have required providers and apply to generating rules.");
     }
 
+    ImmutableSet<Label> execCompatibleWith = ImmutableSet.of();
+    if (!rawExecCompatibleWith.isEmpty()) {
+      execCompatibleWith = parseExecCompatibleWith(rawExecCompatibleWith, thread);
+    }
+
+    ImmutableMap<String, ExecGroup> execGroups = ImmutableMap.of();
+    if (rawExecGroups != Starlark.NONE) {
+      execGroups =
+          ImmutableMap.copyOf(
+              Dict.cast(rawExecGroups, String.class, ExecGroup.class, "exec_group"));
+      for (String group : execGroups.keySet()) {
+        // TODO(b/151742236): document this in the param documentation.
+        if (!StarlarkExecGroupCollection.isValidGroupName(group)) {
+          throw Starlark.errorf("Exec group name '%s' is not a valid name.", group);
+        }
+      }
+    }
+
     return new StarlarkDefinedAspect(
         implementation,
         attrAspects.build(),
@@ -669,7 +685,9 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi<Arti
         HostTransition.INSTANCE,
         ImmutableSet.copyOf(Sequence.cast(hostFragments, String.class, "host_fragments")),
         parseToolchainTypes(toolchains, thread),
-        applyToGeneratingRules);
+        applyToGeneratingRules,
+        execCompatibleWith,
+        execGroups);
   }
 
   /**
@@ -942,8 +960,7 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi<Arti
     BazelModuleContext moduleContext =
         BazelModuleContext.of(Module.ofInnermostEnclosingStarlarkFunction(thread));
     try {
-      return Label.parseWithRepoContext(
-          labelString, moduleContext.label().getRepository(), moduleContext.repoMapping());
+      return Label.parseWithRepoContext(labelString, moduleContext.packageContext());
     } catch (LabelSyntaxException e) {
       throw Starlark.errorf("Illegal absolute label syntax: %s", e.getMessage());
     }
@@ -965,8 +982,7 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi<Arti
     }
 
     ImmutableSet<ToolchainTypeRequirement> toolchainTypes = parseToolchainTypes(toolchains, thread);
-    ImmutableSet<Label> constraints =
-        ImmutableSet.copyOf(parseExecCompatibleWith(execCompatibleWith, thread));
+    ImmutableSet<Label> constraints = parseExecCompatibleWith(execCompatibleWith, thread);
     return ExecGroup.builder()
         .toolchainTypes(toolchainTypes)
         .execCompatibleWith(constraints)
@@ -977,7 +993,7 @@ public class StarlarkRuleClassFunctions implements StarlarkRuleFunctionsApi<Arti
   private static ImmutableSet<ToolchainTypeRequirement> parseToolchainTypes(
       Sequence<?> rawToolchains, StarlarkThread thread) throws EvalException {
     Map<Label, ToolchainTypeRequirement> toolchainTypes = new HashMap<>();
-    LabelConverter converter = LabelConverter.forThread(thread);
+    LabelConverter converter = LabelConverter.forBzlEvaluatingThread(thread);
 
     for (Object rawToolchain : rawToolchains) {
       ToolchainTypeRequirement toolchainType = parseToolchainType(converter, rawToolchain);

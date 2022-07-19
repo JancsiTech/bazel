@@ -169,7 +169,7 @@ public class RegisteredExecutionPlatformsFunction implements SkyFunction {
       TargetPattern.Parser parser =
           new TargetPattern.Parser(
               PathFragment.EMPTY_FRAGMENT,
-              RepositoryName.createUnvalidated(module.getCanonicalRepoName()),
+              module.getCanonicalRepoName(),
               bazelModuleResolutionValue.getFullRepoMapping(module.getKey()));
       for (String pattern : module.getExecutionPlatformsToRegister()) {
         try {
@@ -183,6 +183,7 @@ public class RegisteredExecutionPlatformsFunction implements SkyFunction {
     return executionPlatforms.build();
   }
 
+  @Nullable
   private static ImmutableList<ConfiguredTargetKey> configureRegisteredExecutionPlatforms(
       Environment env, BuildConfigurationValue configuration, List<Label> labels)
       throws InterruptedException, RegisteredExecutionPlatformsFunctionException {

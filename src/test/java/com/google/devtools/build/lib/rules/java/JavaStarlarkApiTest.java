@@ -21,7 +21,6 @@ import static com.google.devtools.build.lib.rules.java.JavaCompileActionTestHelp
 import static com.google.devtools.build.lib.rules.java.JavaCompileActionTestHelper.getProcessorPath;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.Artifact;
@@ -66,8 +65,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
 
   private StructImpl getMyInfoFromTarget(ConfiguredTarget configuredTarget) throws Exception {
     Provider.Key key =
-        new StarlarkProvider.Key(
-            Label.parseAbsolute("//myinfo:myinfo.bzl", ImmutableMap.of()), "MyInfo");
+        new StarlarkProvider.Key(Label.parseCanonical("//myinfo:myinfo.bzl"), "MyInfo");
     return (StructImpl) configuredTarget.get(key);
   }
 
@@ -243,7 +241,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
         (StructImpl)
             configuredTarget.get(
                 new StarlarkProvider.Key(
-                    Label.parseAbsolute("//java/test:extension.bzl", ImmutableMap.of()), "result"));
+                    Label.parseCanonical("//java/test:extension.bzl"), "result"));
 
     Depset transitiveRuntimeJars = ((Depset) info.getValue("transitive_runtime_jars"));
     Depset transitiveCompileTimeJars = ((Depset) info.getValue("transitive_compile_time_jars"));
@@ -304,7 +302,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
         (StructImpl)
             configuredTarget.get(
                 new StarlarkProvider.Key(
-                    Label.parseAbsolute("//java/test:extension.bzl", ImmutableMap.of()), "result"));
+                    Label.parseCanonical("//java/test:extension.bzl"), "result"));
 
     @SuppressWarnings("unchecked") // deserialization
     StarlarkList<JavaOutput> javaOutputs = ((StarlarkList<JavaOutput>) info.getValue("outputs"));
@@ -417,7 +415,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
         (StructImpl)
             configuredTarget.get(
                 new StarlarkProvider.Key(
-                    Label.parseAbsolute("//java/test:extension.bzl", ImmutableMap.of()), "result"));
+                    Label.parseCanonical("//java/test:extension.bzl"), "result"));
 
     JavaRuleOutputJarsProvider outputs = ((JavaRuleOutputJarsProvider) info.getValue("outputs"));
     assertThat(outputs.getJavaOutputs()).hasSize(1);
@@ -1073,7 +1071,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
         (StructImpl)
             configuredTarget.get(
                 new StarlarkProvider.Key(
-                    Label.parseAbsolute("//java/test:extension.bzl", ImmutableMap.of()), "result"));
+                    Label.parseCanonical("//java/test:extension.bzl"), "result"));
 
     assertThat(info.getValue("enabled")).isEqualTo(Boolean.TRUE);
     assertThat(info.getValue("class_jar")).isNotNull();
@@ -1123,8 +1121,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
         (StructImpl)
             configuredTarget.get(
                 new StarlarkProvider.Key(
-                    Label.parseAbsolute("//" + pkg + ":extension.bzl", ImmutableMap.of()),
-                    "result"));
+                    Label.parseCanonical("//" + pkg + ":extension.bzl"), "result"));
 
     return JavaPluginData.create(
         ((Depset) info.getValue("processor_classnames")).getSet(String.class),
@@ -1474,7 +1471,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
         (StructImpl)
             myConfiguredTarget.get(
                 new StarlarkProvider.Key(
-                    Label.parseAbsolute("//java/test:extension.bzl", ImmutableMap.of()), "result"));
+                    Label.parseCanonical("//java/test:extension.bzl"), "result"));
 
     Depset rawMyCompileJars = (Depset) info.getValue("compile_jars");
     Depset rawMyTransitiveRuntimeJars = (Depset) info.getValue("transitive_runtime_jars");
@@ -1517,8 +1514,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
     ConfiguredTarget myRuleTarget = getConfiguredTarget("//foo:r");
     ConfiguredTarget javaLibraryTarget = getConfiguredTarget("//foo:jl");
     StarlarkProvider.Key myProviderKey =
-        new StarlarkProvider.Key(
-            Label.parseAbsolute("//foo:extension.bzl", ImmutableMap.of()), "my_provider");
+        new StarlarkProvider.Key(Label.parseCanonical("//foo:extension.bzl"), "my_provider");
     StructImpl declaredProvider = (StructImpl) myRuleTarget.get(myProviderKey);
     Object javaProvider = declaredProvider.getValue("p");
     assertThat(javaProvider).isInstanceOf(JavaInfo.class);
@@ -1781,8 +1777,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
     StructImpl info =
         (StructImpl)
             myRuleTarget.get(
-                new StarlarkProvider.Key(
-                    Label.parseAbsolute("//foo:extension.bzl", ImmutableMap.of()), "result"));
+                new StarlarkProvider.Key(Label.parseCanonical("//foo:extension.bzl"), "result"));
     @SuppressWarnings("unchecked")
     Sequence<Artifact> sourceJars = (Sequence<Artifact>) info.getValue("source_jars");
     assertThat(prettyArtifactNames(sourceJars)).containsExactly("foo/libmy_java_lib_a-src.jar");
@@ -1811,8 +1806,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
     StructImpl info =
         (StructImpl)
             myRuleTarget.get(
-                new StarlarkProvider.Key(
-                    Label.parseAbsolute("//foo:extension.bzl", ImmutableMap.of()), "result"));
+                new StarlarkProvider.Key(Label.parseCanonical("//foo:extension.bzl"), "result"));
 
     Depset sourceJars = (Depset) info.getValue("property");
 
@@ -1844,8 +1838,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
     StructImpl info =
         (StructImpl)
             myRuleTarget.get(
-                new StarlarkProvider.Key(
-                    Label.parseAbsolute("//foo:extension.bzl", ImmutableMap.of()), "result"));
+                new StarlarkProvider.Key(Label.parseCanonical("//foo:extension.bzl"), "result"));
 
     Depset sourceJars = (Depset) info.getValue("property");
 
@@ -1877,8 +1870,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
     StructImpl info =
         (StructImpl)
             myRuleTarget.get(
-                new StarlarkProvider.Key(
-                    Label.parseAbsolute("//foo:extension.bzl", ImmutableMap.of()), "result"));
+                new StarlarkProvider.Key(Label.parseCanonical("//foo:extension.bzl"), "result"));
 
     Depset sourceJars = (Depset) info.getValue("property");
 
@@ -1913,8 +1905,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
     StructImpl info =
         (StructImpl)
             myRuleTarget.get(
-                new StarlarkProvider.Key(
-                    Label.parseAbsolute("//foo:extension.bzl", ImmutableMap.of()), "result"));
+                new StarlarkProvider.Key(Label.parseCanonical("//foo:extension.bzl"), "result"));
 
     Depset nativeLibs = (Depset) info.getValue("property");
 
@@ -2040,8 +2031,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
 
     JavaInfo javaInfo = javaLibraryTarget.get(JavaInfo.PROVIDER);
     StarlarkProvider.Key myProviderKey =
-        new StarlarkProvider.Key(
-            Label.parseAbsolute("//foo:extension.bzl", ImmutableMap.of()), "my_provider");
+        new StarlarkProvider.Key(Label.parseCanonical("//foo:extension.bzl"), "my_provider");
     StructImpl declaredProvider = (StructImpl) myRuleTarget.get(myProviderKey);
     Object nativeLibrariesFromStarlark = declaredProvider.getValue("p");
     assertThat(nativeLibrariesFromStarlark)
@@ -2137,8 +2127,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
     StructImpl info =
         (StructImpl)
             myRuleTarget.get(
-                new StarlarkProvider.Key(
-                    Label.parseAbsolute("//foo:extension.bzl", ImmutableMap.of()), "result"));
+                new StarlarkProvider.Key(Label.parseCanonical("//foo:extension.bzl"), "result"));
 
     JavaGenJarsProvider javaGenJarsProvider = (JavaGenJarsProvider) info.getValue("property");
 
@@ -2167,8 +2156,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
     StructImpl info =
         (StructImpl)
             myRuleTarget.get(
-                new StarlarkProvider.Key(
-                    Label.parseAbsolute("//foo:extension.bzl", ImmutableMap.of()), "result"));
+                new StarlarkProvider.Key(Label.parseCanonical("//foo:extension.bzl"), "result"));
 
     JavaCompilationInfoProvider javaCompilationInfoProvider =
         (JavaCompilationInfoProvider) info.getValue("property");
@@ -2438,8 +2426,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
     StructImpl info =
         (StructImpl)
             configuredTarget.get(
-                new StarlarkProvider.Key(
-                    Label.parseAbsolute("//foo:rule.bzl", ImmutableMap.of()), "result"));
+                new StarlarkProvider.Key(Label.parseCanonical("//foo:rule.bzl"), "result"));
     assertThat(((String) info.getValue("strict_java_deps"))).isEqualTo("default");
   }
 
@@ -2460,8 +2447,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
     StructImpl info =
         (StructImpl)
             configuredTarget.get(
-                new StarlarkProvider.Key(
-                    Label.parseAbsolute("//foo:rule.bzl", ImmutableMap.of()), "result"));
+                new StarlarkProvider.Key(Label.parseCanonical("//foo:rule.bzl"), "result"));
     assertThat(((String) info.getValue("strict_java_deps"))).isEqualTo("error");
   }
 
@@ -2517,8 +2503,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
     StructImpl info =
         (StructImpl)
             configuredTarget.get(
-                new StarlarkProvider.Key(
-                    Label.parseAbsolute("//foo:rule.bzl", ImmutableMap.of()), "result"));
+                new StarlarkProvider.Key(Label.parseCanonical("//foo:rule.bzl"), "result"));
     JavaToolchainProvider javaToolchainProvider =
         JavaToolchainProvider.from((ConfiguredTarget) info.getValue("java_toolchain_label"));
     Label javaToolchainLabel = javaToolchainProvider.getToolchainLabel();
@@ -2556,8 +2541,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
     StructImpl info =
         (StructImpl)
             configuredTarget.get(
-                new StarlarkProvider.Key(
-                    Label.parseAbsolute("//foo:rule.bzl", ImmutableMap.of()), "result"));
+                new StarlarkProvider.Key(Label.parseCanonical("//foo:rule.bzl"), "result"));
     JavaToolchainProvider javaToolchainProvider =
         JavaToolchainProvider.from((ConfiguredTarget) info.getValue("java_toolchain_label"));
     Label javaToolchainLabel = javaToolchainProvider.getToolchainLabel();
@@ -3155,14 +3139,14 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
   }
 
   @Test
-  public void testExportsIsPrivateApi() throws Exception {
+  public void testMergeJavaOutputsIsPrivateApi() throws Exception {
     scratch.file(
         "foo/custom_rule.bzl",
         "def _impl(ctx):",
         "  output_jar = ctx.actions.declare_file('lib.jar')",
         "  java_info = JavaInfo(output_jar = output_jar, compile_jar = None)",
         "  java_common.merge([java_info],",
-        "    exports = [java_info]",
+        "    merge_java_outputs = False",
         "  )",
         "  return []",
         "java_custom_library = rule(",
@@ -3181,14 +3165,14 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
   }
 
   @Test
-  public void testRuntimeDepsIsPrivateApi() throws Exception {
+  public void testMergeSourceJarsIsPrivateApi() throws Exception {
     scratch.file(
         "foo/custom_rule.bzl",
         "def _impl(ctx):",
         "  output_jar = ctx.actions.declare_file('lib.jar')",
         "  java_info = JavaInfo(output_jar = output_jar, compile_jar = None)",
         "  java_common.merge([java_info],",
-        "    runtime_deps = [java_info]",
+        "    merge_source_jars = False",
         "  )",
         "  return []",
         "java_custom_library = rule(",
@@ -3207,33 +3191,7 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
   }
 
   @Test
-  public void testIncludeSourceJarsIsPrivateApi() throws Exception {
-    scratch.file(
-        "foo/custom_rule.bzl",
-        "def _impl(ctx):",
-        "  output_jar = ctx.actions.declare_file('lib.jar')",
-        "  java_info = JavaInfo(output_jar = output_jar, compile_jar = None)",
-        "  java_common.merge([java_info],",
-        "    include_source_jars_from_exports = True",
-        "  )",
-        "  return []",
-        "java_custom_library = rule(",
-        "  implementation = _impl,",
-        "  fragments = ['java']",
-        ")");
-    scratch.file(
-        "foo/BUILD",
-        "load(':custom_rule.bzl', 'java_custom_library')",
-        "java_custom_library(name = 'custom')");
-    reporter.removeHandler(failFastHandler);
-
-    getConfiguredTarget("//foo:custom");
-
-    assertContainsEvent("Rule in 'foo' cannot use private API");
-  }
-
-  @Test
-  public void testCreateOutputSourceJarIsPrivateApi() throws Exception {
+  public void testCompileIncludeCompilationInfoIsPrivateApi() throws Exception {
     JavaToolchainTestUtil.writeBuildFileForJavaToolchain(scratch);
     scratch.file(
         "foo/custom_rule.bzl",
@@ -3242,7 +3200,40 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
         "    ctx,",
         "    output = ctx.actions.declare_file('output.jar'),",
         "    java_toolchain = ctx.attr._java_toolchain[java_common.JavaToolchainInfo],",
-        "    create_output_source_jar = False,",
+        "    include_compilation_info = False,",
+        "  )",
+        "  return []",
+        "java_custom_library = rule(",
+        "  implementation = _impl,",
+        "  attrs = {",
+        "    'srcs': attr.label_list(),",
+        "    '_java_toolchain': attr.label(default = Label('//java/com/google/test:toolchain')),",
+        "  },",
+        "  fragments = ['java']",
+        ")");
+    scratch.file(
+        "foo/BUILD",
+        "load(':custom_rule.bzl', 'java_custom_library')",
+        "java_custom_library(name = 'custom')");
+    reporter.removeHandler(failFastHandler);
+
+    getConfiguredTarget("//foo:custom");
+
+    assertContainsEvent("Rule in 'foo' cannot use private API");
+  }
+
+  @Test
+  public void testCompileWithResorceJarsIsPrivateApi() throws Exception {
+    JavaToolchainTestUtil.writeBuildFileForJavaToolchain(scratch);
+    scratch.file(
+        "foo/custom_rule.bzl",
+        "def _impl(ctx):",
+        "  java_toolchain = ctx.attr._java_toolchain[java_common.JavaToolchainInfo]",
+        "  java_common.compile(",
+        "    ctx,",
+        "    output = ctx.actions.declare_file('output.jar'),",
+        "    java_toolchain = java_toolchain,",
+        "    resource_jars = [java_toolchain.timezone_data()],",
         "  )",
         "  return []",
         "java_custom_library = rule(",
@@ -3286,6 +3277,31 @@ public class JavaStarlarkApiTest extends BuildViewTestCase {
             .getFilesToBuild();
 
     assertThat(prettyArtifactNames(artifacts)).containsExactly("build-info-redacted.properties");
+  }
+
+  @Test
+  public void mergeAddExports() throws Exception {
+    scratch.file(
+        "foo/custom_library.bzl",
+        "def _impl(ctx):",
+        "  java_provider = java_common.merge([dep[JavaInfo] for dep in ctx.attr.deps])",
+        "  return [java_provider]",
+        "custom_library = rule(",
+        "  attrs = {",
+        "    'deps': attr.label_list(),",
+        "  },",
+        "  implementation = _impl",
+        ")");
+    scratch.file(
+        "foo/BUILD",
+        "load(':custom_library.bzl', 'custom_library')",
+        "custom_library(name = 'custom', deps = [':a'])",
+        "java_library(name = 'a', srcs = ['java/A.java'], add_exports = ['java.base/java.lang'])");
+
+    ConfiguredTarget myRuleTarget = getConfiguredTarget("//foo:custom");
+    JavaModuleFlagsProvider provider =
+        JavaInfo.getProvider(JavaModuleFlagsProvider.class, myRuleTarget);
+    assertThat(provider.toFlags()).containsExactly("--add-exports=java.base/java.lang=ALL-UNNAMED");
   }
 
   private InstrumentedFilesInfo getInstrumentedFilesProvider(String label) throws Exception {

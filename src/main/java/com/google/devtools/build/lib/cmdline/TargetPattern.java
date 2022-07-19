@@ -40,6 +40,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
 import java.util.regex.Pattern;
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
 
 /**
@@ -502,6 +503,7 @@ public abstract class TargetPattern {
      * @return the Target corresponding to the given pattern, if the pattern is absolute and there
      *     is such a target. Otherwise, return null.
      */
+    @Nullable
     private <T> ResolvedTargets<T> getWildcardConflict(TargetPatternResolver<T> resolver)
         throws InconsistentFilesystemException, InterruptedException {
       if (!wasOriginallyAbsolute) {
@@ -909,11 +911,13 @@ public abstract class TargetPattern {
           throw new TargetParsingException(
               "Couldn't find package in target " + pattern, TargetPatterns.Code.PACKAGE_NOT_FOUND);
         }
+        String repoPart = pattern.substring(1, pkgStart);
         try {
-          repository = repoMapping.get(RepositoryName.create(pattern.substring(1, pkgStart)));
+          RepositoryName.validate(repoPart);
         } catch (LabelSyntaxException e) {
           throw new TargetParsingException(e.getMessage(), TargetPatterns.Code.LABEL_SYNTAX_ERROR);
         }
+        repository = repoMapping.get(repoPart);
         if (!repository.isVisible()) {
           throw new TargetParsingException(
               String.format(

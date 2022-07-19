@@ -150,6 +150,7 @@ public final class ConfiguredTargetFactory {
     }
   }
 
+  @Nullable
   private static TransitiveInfoCollection findVisibilityPrerequisite(
       OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> prerequisiteMap, Label label) {
     for (ConfiguredTargetAndData prerequisite :
@@ -311,7 +312,7 @@ public final class ConfiguredTargetFactory {
                     rule,
                     configuration,
                     ruleClassProvider.getFragmentRegistry().getUniversalFragments(),
-                    configConditions.asProviders(),
+                    configConditions,
                     prerequisiteMap.values()))
             .build();
 
@@ -490,7 +491,8 @@ public final class ConfiguredTargetFactory {
       Aspect aspect,
       OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> prerequisiteMap,
       ConfigConditions configConditions,
-      @Nullable ResolvedToolchainContext toolchainContext,
+      @Nullable ToolchainCollection<ResolvedToolchainContext> toolchainContexts,
+      @Nullable ExecGroupCollection.Builder execGroupCollectionBuilder,
       BuildConfigurationValue aspectConfiguration,
       BuildConfigurationValue hostConfiguration,
       AspectKeyCreator.AspectKey aspectKey)
@@ -508,10 +510,8 @@ public final class ConfiguredTargetFactory {
             .setPrerequisites(transformPrerequisiteMap(prerequisiteMap))
             .setAspectAttributes(mergeAspectAttributes(aspectPath))
             .setConfigConditions(configConditions)
-            .setToolchainContext(toolchainContext)
-            // TODO(b/161222568): Implement the exec_properties attr for aspects and read its value
-            // here.
-            .setExecGroupCollectionBuilder(ExecGroupCollection.emptyBuilder())
+            .setToolchainContexts(toolchainContexts)
+            .setExecGroupCollectionBuilder(execGroupCollectionBuilder)
             .setExecProperties(ImmutableMap.of())
             .setRequiredConfigFragments(
                 RequiredFragmentsUtil.getAspectRequiredFragmentsIfEnabled(
@@ -520,7 +520,7 @@ public final class ConfiguredTargetFactory {
                     associatedTarget.getTarget().getAssociatedRule(),
                     aspectConfiguration,
                     ruleClassProvider.getFragmentRegistry().getUniversalFragments(),
-                    configConditions.asProviders(),
+                    configConditions,
                     Iterables.concat(prerequisiteMap.values(), ImmutableList.of(associatedTarget))))
             .build();
 
@@ -545,11 +545,11 @@ public final class ConfiguredTargetFactory {
               ruleContext,
               aspect.getParameters(),
               ruleClassProvider.getToolsRepository());
+      if (configuredAspect == null) {
+        return erroredConfiguredAspect(ruleContext);
+      }
     } finally {
       ruleContext.close();
-    }
-    if (configuredAspect == null) {
-      return erroredConfiguredAspect(ruleContext);
     }
 
     validateAdvertisedProviders(

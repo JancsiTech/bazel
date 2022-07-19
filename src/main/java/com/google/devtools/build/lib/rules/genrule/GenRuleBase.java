@@ -90,6 +90,7 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
     WINDOWS_POWERSHELL,
   }
 
+  @Nullable
   private static Pair<CommandType, String> determineCommandTypeAndAttribute(
       RuleContext ruleContext) {
     AttributeMap attributeMap = ruleContext.attributes();
@@ -229,7 +230,8 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
         break;
       case BASH:
       default:
-        PathFragment shExecutable = ShToolchain.getPathOrError(ruleContext);
+        // TODO(b/234923262): Take exec_group into consideration when selecting sh tools
+        PathFragment shExecutable = ShToolchain.getPathOrError(ruleContext.getExecutionPlatform());
         constructor =
             CommandHelper.buildBashCommandConstructor(
                 executionInfo, shExecutable, ".genrule_script.sh");
@@ -288,6 +290,7 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
    * Returns the executable artifact, if the rule is marked as executable and there is only one
    * artifact.
    */
+  @Nullable
   private static Artifact getExecutable(RuleContext ruleContext, NestedSet<Artifact> filesToBuild) {
     if (!ruleContext.attributes().get("executable", Type.BOOLEAN)) {
       return null;

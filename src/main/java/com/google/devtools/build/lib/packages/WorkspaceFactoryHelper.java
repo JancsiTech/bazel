@@ -18,7 +18,6 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.base.Verify;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
@@ -55,7 +54,7 @@ public class WorkspaceFactoryHelper {
     overwriteRule(pkg, rule);
     for (Map.Entry<String, Label> entry :
         ruleClass.getExternalBindingsFunction().apply(rule).entrySet()) {
-      Label nameLabel = Label.parseAbsolute("//external:" + entry.getKey(), ImmutableMap.of());
+      Label nameLabel = Label.parseCanonical("//external:" + entry.getKey());
       addBindRule(pkg, bindRuleClass, nameLabel, entry.getValue(), semantics, callstack);
     }
     // NOTE(wyv): What is this madness?? This is the only instance where a repository rule can
@@ -105,7 +104,7 @@ public class WorkspaceFactoryHelper {
       // is not valid.
       builder.addRepositoryMappingEntry(
           RepositoryName.create(externalRepoName),
-          RepositoryName.create(builder.getPackageWorkspaceName()),
+          builder.getPackageWorkspaceName(),
           RepositoryName.MAIN);
     }
   }
@@ -128,15 +127,20 @@ public class WorkspaceFactoryHelper {
         // prefixed with an @.
         if (!e.getKey().startsWith("@")) {
           throw new LabelSyntaxException(
-              "invalid repository name '" + e.getKey() + "': repo names must start with '@'");
+              "invalid repository name '"
+                  + e.getKey()
+                  + "': repo names used in the repo_mapping attribute must start with '@'");
         }
         if (!e.getValue().startsWith("@")) {
           throw new LabelSyntaxException(
-              "invalid repository name '" + e.getValue() + "': repo names must start with '@'");
+              "invalid repository name '"
+                  + e.getValue()
+                  + "': repo names used in the repo_mapping attribute must start with '@'");
         }
+        RepositoryName.validateUserProvidedRepoName(e.getKey().substring(1));
         builder.addRepositoryMappingEntry(
             RepositoryName.create(externalRepoName),
-            RepositoryName.create(e.getKey().substring(1)),
+            e.getKey().substring(1),
             RepositoryName.create(e.getValue().substring(1)));
       }
     }
